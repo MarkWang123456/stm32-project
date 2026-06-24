@@ -1,0 +1,32 @@
+==========================================
+
+STM32 Makefile Project .gitignore
+
+==========================================
+
+1. 忽略編譯產出的資料夾與檔案 (絕對不要 Push 這些)
+
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.su
+
+2. 忽略 STM32CubeMX 自動產生的備份檔或日誌
+
+*.bak
+*.log
+*.tmp
+
+3. 忽略 VS Code 編輯器設定 (避免路徑衝突)
+
+.vscode/
+
+4. 忽略作業系統產生的垃圾檔
+
+.DS_Store
+Thumbs.db
+Desktop.ini
