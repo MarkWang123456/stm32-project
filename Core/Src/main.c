@@ -101,19 +101,36 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_Delay(2000); // 開機先等兩秒，讓 USB 和感測器都準備好
   printf("===== STM32 Data Logger Booting... =====\r\n");
+  // 系統狀態旗標 (0代表失敗，1代表成功)
+  uint8_t system_ready = 0;
 
-  uint8_t mpu6050_addr = 0xD0; // MPU6050 的 I2C 位址 (AD0 接 GND)
+  // MPU-6000
+  uint8_t mpu6050_addr = 0x68 << 1; // MPU6050 的 I2C 位址 (AD0 接 GND)(左移 1 位變成 0xD0)
   uint8_t who_am_i_reg = 0x75; // WhoAmI 暫存器位址
   uint8_t mpu_id = 0;
   
   uint8_t pwr_mgmt_1_reg = 0x6B; // 電源管理暫存器 1
   uint8_t wake_up_data = 0x00;   // 寫入 0x00 解除睡眠模式
 
+  //BME280
+  uint8_t bme280_addr = 0x77 << 1; // BME280 的 I2C 門牌 (左移 1 位變成 0xEC)
+       
+  uint8_t ctrl_hum_reg = 0xF2; // 濕度控制暫存器 (ctrl_hum)
+  uint8_t ctrl_hum_data = 0x01;  // 0x01 代表濕度過採樣率 x1，通常有 x1, x2, x4, x8, x16 可以選）
+
+  uint8_t ctrl_meas_reg = 0xF4; //測量控制暫存器 (ctrl_meas)
+  // 0x27 的二進位是 00100111：
+  // 溫度過採樣率x1 (001) | 氣壓過採樣率x1 (001) | Normal Mode (11) = 0x27
+  uint8_t ctrl_meas_data = 0x27; 
+
   printf("Scanning I2C Bus...\r\n");
-  
+  uint8_t mpu_ok = (HAL_I2C_IsDeviceReady(&hi2c1, mpu6050_addr, 3, 1000) == HAL_OK);
+  uint8_t bme_ok = (HAL_I2C_IsDeviceReady(&hi2c1, bme280_addr, 3, 1000) == HAL_OK);
+
   // 1. 檢查裝置是否存在
-  if (HAL_I2C_IsDeviceReady(&hi2c1, mpu6050_addr, 3, 1000) == HAL_OK) {
-      printf("Device Found at 0xD0!\r\n");
+  if (mpu_ok && bme_ok) {
+      printf("All Devices Found (MPU6050 & BME280)!\r\n");
+      system_ready = 1; //兩個都在，標記系統準備就緒！
       
       // 2. 喚醒 MPU6050 (寫入 0x00 到 0x6B)
       if (HAL_I2C_Mem_Write(&hi2c1, mpu6050_addr, pwr_mgmt_1_reg, I2C_MEMADD_SIZE_8BIT, &wake_up_data, 1, 1000) == HAL_OK) {
@@ -137,30 +154,48 @@ int main(void)
       uint8_t smplrt_div_data = 0x04; // 分頻器 = 4，最終採樣率 = 1000Hz / (1 + 4) = 200Hz
 
       printf("Configuring MPU6050 Sample Rate to 200Hz...\r\n");
-
-      // 1. 寫入 CONFIG 暫存器 (設定濾波器)
+      // 寫入 CONFIG 暫存器 (設定濾波器)
       if (HAL_I2C_Mem_Write(&hi2c1, mpu6050_addr, config_reg, I2C_MEMADD_SIZE_8BIT, &config_data, 1, 1000) == HAL_OK) {
           printf("  -> DLPF Configured (0x1A = 0x03)\r\n");
       } else {
           printf("  -> ERROR: Failed to config DLPF!\r\n");
       }
 
-      // 2. 寫入 SMPLRT_DIV 暫存器 (設定分頻)
+      // 寫入 SMPLRT_DIV 暫存器 (設定分頻)
       if (HAL_I2C_Mem_Write(&hi2c1, mpu6050_addr, smplrt_div_reg, I2C_MEMADD_SIZE_8BIT, &smplrt_div_data, 1, 1000) == HAL_OK) {
           printf("  -> Sample Rate Configured to 200Hz (0x19 = 0x04)\r\n");
       } else {
           printf("  -> ERROR: Failed to config Sample Rate!\r\n");
       }
-      // ===============================================
+
+
+      // === 任務 1-6：BME280 初始化 ===
+      printf("Initializing BME280...\r\n");
+      // 4. 務必先寫入濕度設定 (0xF2)
+      if (HAL_I2C_Mem_Write(&hi2c1, bme280_addr, ctrl_hum_reg, I2C_MEMADD_SIZE_8BIT, &ctrl_hum_data, 1, 1000) == HAL_OK) {
+          printf("  -> BME280 Humidity Configured (0xF2 = 0x01)\r\n");
+      } else {
+          printf("  -> ERROR: BME280 NOT Found or Failed at 0xF2!\r\n");
+      }
+
+      // 5. 再寫入溫度、氣壓設定，並喚醒進入 Normal Mode (0xF4)
+      if (HAL_I2C_Mem_Write(&hi2c1, bme280_addr, ctrl_meas_reg, I2C_MEMADD_SIZE_8BIT, &ctrl_meas_data, 1, 1000) == HAL_OK) {
+          printf("  -> BME280 Temp/Press Configured & Normal Mode Started (0xF4 = 0x27)\r\n");
+      } else {
+          printf("  -> ERROR: BME280 Failed at 0xF4!\r\n");
+      }
       
   } else {
-      printf("ERROR: Device NOT Found at 0xD0!\r\n");
+      if (!mpu_ok) printf("ERROR: MPU6050 (0xD0) NOT Found! Check wiring.\r\n");
+      if (!bme_ok) printf("ERROR: BME280 NOT Found! (Try changing address to 0x76)\r\n");
+      system_ready = 0; // 標記系統失敗
   }
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1) {
+    if(system_ready == 1){
       // === 任務 1-5：連續讀取 14 Bytes 原始數據並轉換物理量 ===
       uint8_t data_reg = 0x3B; // 起始位址 (ACCEL_XOUT_H)
       // 準備一個大陣列，一次接住 14 Bytes
@@ -214,6 +249,12 @@ int main(void)
       // 我們設定的採樣率是 200Hz (每 5 毫秒一筆)
       // 但為了避免 Tera Term 畫面刷太快讓眼睛瞎掉，我們先用 Delay 控制在每秒印 20 次就好
       HAL_Delay(50); 
+    } else {
+      // 如果感測器有問題，每 3 秒印一次警告，不再印 0.00 洗畫面
+      printf("System Halted: Hardware error. Please fix and reset.\r\n");
+      HAL_Delay(3000);
+    }
+     
 
     /* USER CODE END WHILE */
 
