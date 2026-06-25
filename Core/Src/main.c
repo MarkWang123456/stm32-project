@@ -128,6 +128,30 @@ int main(void)
       } else {
           printf("Read WhoAmI Failed!\r\n");
       }
+
+      // === 任務 1-4：採樣率與低通濾波器配置 ===
+      uint8_t config_reg = 0x1A; //暫存器 0x1A (CONFIG)：數位低通濾波器 (DLPF) 設置
+      uint8_t config_data = 0x03; // DLPF_CFG = 3 (內部採樣率 1kHz，濾除高頻雜訊)
+      
+      uint8_t smplrt_div_reg = 0x19; //暫存器 0x19 (SMPLRT_DIV)：採樣率分頻器設置
+      uint8_t smplrt_div_data = 0x04; // 分頻器 = 4，最終採樣率 = 1000Hz / (1 + 4) = 200Hz
+
+      printf("Configuring MPU6050 Sample Rate to 200Hz...\r\n");
+
+      // 1. 寫入 CONFIG 暫存器 (設定濾波器)
+      if (HAL_I2C_Mem_Write(&hi2c1, mpu6050_addr, config_reg, I2C_MEMADD_SIZE_8BIT, &config_data, 1, 1000) == HAL_OK) {
+          printf("  -> DLPF Configured (0x1A = 0x03)\r\n");
+      } else {
+          printf("  -> ERROR: Failed to config DLPF!\r\n");
+      }
+
+      // 2. 寫入 SMPLRT_DIV 暫存器 (設定分頻)
+      if (HAL_I2C_Mem_Write(&hi2c1, mpu6050_addr, smplrt_div_reg, I2C_MEMADD_SIZE_8BIT, &smplrt_div_data, 1, 1000) == HAL_OK) {
+          printf("  -> Sample Rate Configured to 200Hz (0x19 = 0x04)\r\n");
+      } else {
+          printf("  -> ERROR: Failed to config Sample Rate!\r\n");
+      }
+      // ===============================================
       
   } else {
       printf("ERROR: Device NOT Found at 0xD0!\r\n");
