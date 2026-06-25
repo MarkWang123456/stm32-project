@@ -160,8 +160,61 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+  while (1) {
+      // === 任務 1-5：連續讀取 14 Bytes 原始數據並轉換物理量 ===
+      uint8_t data_reg = 0x3B; // 起始位址 (ACCEL_XOUT_H)
+      // 準備一個大陣列，一次接住 14 Bytes
+      // 每個數值2bytes，加速度計X、Y、Z 三軸，溫度感測器，陀螺儀X、Y、Z 三軸
+      uint8_t raw_data[14];    
+
+      // === 裝「原始數據 (生肉)」的變數 ===
+      // 用來存放從 MPU6050 剛拿出來、拼裝好的 16-bit ADC 刻度值
+      int16_t raw_accel_x, raw_accel_y, raw_accel_z; // 加速度原始刻度
+      int16_t raw_gyro_x, raw_gyro_y, raw_gyro_z;    // 陀螺儀原始刻度
+
+      // === 裝「實體物理量 (熟肉)」的變數 ===
+      // 用來存放除以靈敏度後，人類看得懂的真實數值 (包含小數點)
+      float accel_x, accel_y, accel_z; // 真實重力加速度 (單位: g)
+      float gyro_x, gyro_y, gyro_z;    // 真實旋轉角速度 (單位: dps, 度/秒)
+
+      // 使用 I2C 一口氣連續讀取 14 Bytes
+      if (HAL_I2C_Mem_Read(&hi2c1, 0xD0, data_reg, I2C_MEMADD_SIZE_8BIT, raw_data, 14, 1000) == HAL_OK) {
+          
+          // 1. 拼裝 16-bit 原始數據 (High Byte 左移 8 位元，然後與 Low Byte 做 OR 運算)
+          raw_accel_x = (int16_t)(raw_data[0] << 8 | raw_data[1]);
+          raw_accel_y = (int16_t)(raw_data[2] << 8 | raw_data[3]);
+          raw_accel_z = (int16_t)(raw_data[4] << 8 | raw_data[5]);
+          
+          // raw_data[6] 和 [7] 是溫度數據，我們先略過不看
+          
+          raw_gyro_x  = (int16_t)(raw_data[8] << 8 | raw_data[9]);
+          raw_gyro_y  = (int16_t)(raw_data[10] << 8 | raw_data[11]);
+          raw_gyro_z  = (int16_t)(raw_data[12] << 8 | raw_data[13]);
+
+          // 2. 轉換為實體物理量 (Float)
+          // 根據 Datasheet，加速度預設範圍 ±2g(最大只能量到2倍的地球重力)
+          // 對應靈敏度為 16384 LSB/g(int16_t範圍是-32,768 到 +32,767，最大是2g，除二就是16384)
+          accel_x = (float)raw_accel_x / 16384.0f;
+          accel_y = (float)raw_accel_y / 16384.0f;
+          accel_z = (float)raw_accel_z / 16384.0f;
+
+          // 陀螺儀預設範圍 ±250 dps(Degrees Per Second)(大約是 0.7 圈)，對應靈敏度為 131 LSB/dps(32767/250)
+          gyro_x = (float)raw_gyro_x / 131.0f;
+          gyro_y = (float)raw_gyro_y / 131.0f;
+          gyro_z = (float)raw_gyro_z / 131.0f;
+
+          // 3. 漂亮地印出包含小數點的物理量
+          printf("Acc(g): X=%.2f Y=%.2f Z=%.2f | Gyr(dps): X=%.1f Y=%.1f Z=%.1f\r\n", 
+                 accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z);
+          
+      } else {
+          printf("ERROR: Failed to read MPU6050 data!\r\n");
+      }
+
+      // 我們設定的採樣率是 200Hz (每 5 毫秒一筆)
+      // 但為了避免 Tera Term 畫面刷太快讓眼睛瞎掉，我們先用 Delay 控制在每秒印 20 次就好
+      HAL_Delay(50); 
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
