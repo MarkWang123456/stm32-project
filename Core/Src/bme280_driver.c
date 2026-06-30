@@ -1,37 +1,58 @@
 #include "bme280_driver.h"
+#include <math.h>
+
+#define BME280_I2C_ADDR_ALT (0x76 << 1)
 
 // Bosch 提供的 BME280 補償運算邏輯中，需要用到這個全域變數來暫存中間值
 // 這是一個 Bosch 定義的微調參數，用於氣壓與濕度計算
 int32_t t_fine;
 
+static uint16_t bme280_i2c_addr = BME280_I2C_ADDR;
+
+static uint8_t BME280_ReadChipId(I2C_HandleTypeDef *hi2c, uint16_t addr, uint8_t *chip_id)
+{
+    return (HAL_I2C_Mem_Read(hi2c, addr, BME280_ID_REG, I2C_MEMADD_SIZE_8BIT, chip_id, 1, 1000) == HAL_OK)
+        && (*chip_id == BME280_ID_VALUE);
+}
+
 // 1. 初始化函數：檢查 ID 與連線
 uint8_t BME280_Init(I2C_HandleTypeDef *hi2c) {
     uint8_t chip_id = 0;
     uint8_t data;
-    
-    // 讀取 Chip ID
-    HAL_I2C_Mem_Read(hi2c, BME280_I2C_ADDR, BME280_ID_REG, I2C_MEMADD_SIZE_8BIT, &chip_id, 1, 1000);
-    
-    if (chip_id != BME280_ID_VALUE) return 0; // 若 ID 不符，連線失敗
+
+    // 先嘗試常見的 0x77，再試 0x76
+    if (BME280_ReadChipId(hi2c, BME280_I2C_ADDR, &chip_id)) {
+        bme280_i2c_addr = BME280_I2C_ADDR;
+    } else if (BME280_ReadChipId(hi2c, BME280_I2C_ADDR_ALT, &chip_id)) {
+        bme280_i2c_addr = BME280_I2C_ADDR_ALT;
+    } else {
+        return 0;
+    }
 
     // 設定濕度過採樣 (ctrl_hum)
     data = BME280_DEFAULT_CTRL_HUM;
-    HAL_I2C_Mem_Write(hi2c, BME280_I2C_ADDR, BME280_CTRL_HUM, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+    if (HAL_I2C_Mem_Write(hi2c, bme280_i2c_addr, BME280_CTRL_HUM, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000) != HAL_OK) {
+        return 0;
+    }
 
     // 設定溫度與氣壓過採樣及模式 (ctrl_meas)
     data = BME280_DEFAULT_CTRL_MEAS;
-    HAL_I2C_Mem_Write(hi2c, BME280_I2C_ADDR, BME280_CTRL_MEAS, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+    if (HAL_I2C_Mem_Write(hi2c, bme280_i2c_addr, BME280_CTRL_MEAS, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000) != HAL_OK) {
+        return 0;
+    }
 
     return 1; // 連線與設定成功
 }
 
 // 2. 讀取校準參數：Bosch 的 DNA 數據
-void BME280_Read_Calibration(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib) {
+uint8_t BME280_Read_Calibration(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib) {
     uint8_t buffer[24] = {0};
     uint8_t h_buf[7] = {0};
     
     // 從校準參數起始位址讀取 24 Bytes
-    HAL_I2C_Mem_Read(hi2c, BME280_I2C_ADDR, BME280_CALIB_T_P_START, I2C_MEMADD_SIZE_8BIT, buffer, 24, 1000);
+    if (HAL_I2C_Mem_Read(hi2c, bme280_i2c_addr, BME280_CALIB_T_P_START, I2C_MEMADD_SIZE_8BIT, buffer, 24, 1000) != HAL_OK) {
+        return 0;
+    }
 
     calib->dig_T1 = (uint16_t)(buffer[1] << 8 | buffer[0]);
     calib->dig_T2 = (int16_t)(buffer[3] << 8 | buffer[2]);
@@ -48,10 +69,14 @@ void BME280_Read_Calibration(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib) 
     calib->dig_P9 = (int16_t)(buffer[23] << 8 | buffer[22]);
 
     // 濕度校準參數讀取
-    HAL_I2C_Mem_Read(hi2c, BME280_I2C_ADDR, BME280_CALIB_H1_ADDR, I2C_MEMADD_SIZE_8BIT, &calib->dig_H1, 1, 1000);
+    if (HAL_I2C_Mem_Read(hi2c, bme280_i2c_addr, BME280_CALIB_H1_ADDR, I2C_MEMADD_SIZE_8BIT, &calib->dig_H1, 1, 1000) != HAL_OK) {
+        return 0;
+    }
 
     // 讀取 H2-H6 (0xE1-0xE7)
-    HAL_I2C_Mem_Read(hi2c, BME280_I2C_ADDR, BME280_CALIB_H2_ADDR, I2C_MEMADD_SIZE_8BIT, h_buf, 7, 1000);
+    if (HAL_I2C_Mem_Read(hi2c, bme280_i2c_addr, BME280_CALIB_H2_ADDR, I2C_MEMADD_SIZE_8BIT, h_buf, 7, 1000) != HAL_OK) {
+        return 0;
+    }
 
     // 解析 H2-H6
     calib->dig_H2 = (int16_t)((h_buf[1] << 8) | h_buf[0]);// 將高位元組左移並與低位元組進行位元合併，還原成 16-bit 數值
@@ -59,14 +84,21 @@ void BME280_Read_Calibration(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib) 
     calib->dig_H4 = (int16_t)((h_buf[3] << 4) | (h_buf[4] & 0x0F));// 將暫存器資料組合成 12-bit 的 H4 參數
     calib->dig_H5 = (int16_t)((h_buf[5] << 4) | (h_buf[4] >> 4));
     calib->dig_H6 = (int8_t)h_buf[6];
+
+    return 1;
 }
 
 // 3. 讀取數據並進行補償運算
-void BME280_ReadAll(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib, BME280_Data *data) {
+uint8_t BME280_ReadAll(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib, BME280_Data *data) {
     uint8_t raw[8];
     
         // 從 0xF7 開始連續讀取 8 個 Byte (P, T, H)
-    if (HAL_I2C_Mem_Read(hi2c, BME280_I2C_ADDR, BME280_DATA_REG, I2C_MEMADD_SIZE_8BIT, raw, 8, 1000) != HAL_OK) return;
+    if (HAL_I2C_Mem_Read(hi2c, bme280_i2c_addr, BME280_DATA_REG, I2C_MEMADD_SIZE_8BIT, raw, 8, 1000) != HAL_OK) {
+        data->temp = NAN;
+        data->press = NAN;
+        data->hum = NAN;
+        return 0;
+    }
 
     int32_t adc_P = (int32_t)((raw[0] << 12) | (raw[1] << 4) | (raw[2] >> 4));
     int32_t adc_T = (int32_t)((raw[3] << 12) | (raw[4] << 4) | (raw[5] >> 4));
@@ -94,6 +126,8 @@ void BME280_ReadAll(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib, BME280_Da
         p_var2 = (((int64_t)calib->dig_P8) * p) >> 19;
         p = ((p + p_var1 + p_var2) >> 8) + (((int64_t)calib->dig_P7) << 4);
         data->press = (float)p / 256.0f;
+    } else {
+        data->press = NAN;
     }
 
     // 濕度補償
@@ -104,4 +138,6 @@ void BME280_ReadAll(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib, BME280_Da
     v_x1 = (v_x1 < 0 ? 0 : v_x1);
     v_x1 = (v_x1 > 419430400 ? 419430400 : v_x1);
     data->hum = (float)(v_x1 >> 12) / 1024.0f;
+
+    return 1;
 }

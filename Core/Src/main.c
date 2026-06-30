@@ -27,6 +27,8 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h> // 引入標準輸入輸出函式庫
 #include "usbd_cdc_if.h" // 引入 USB CDC 傳輸函式庫
+#include "mpu6050_driver.h"
+#include "bme280_driver.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +50,9 @@
 
 /* USER CODE BEGIN PV */
 
+// 跨檔案共享的全域 BME280 校準參數
+BME280_Calib_Data bme_calib;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -59,11 +64,29 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#include "usbd_core.h" 
+
+
+// 告訴編譯器 hUsbDeviceFS 在其他檔案裡
+extern USBD_HandleTypeDef hUsbDeviceFS;
+
 // 覆寫 _write 函數，讓 printf 透過 USB CDC 輸出
 int _write(int file, char *ptr, int len) {
-    // 一直嘗試傳送，直到 USB 不再回報 BUSY 為止
-    while(CDC_Transmit_FS((uint8_t*)ptr, len) == USBD_BUSY) {
-        HAL_Delay(1); // 等待 1 毫秒讓上一筆資料傳完
+    // 如果 USB 還沒被電腦成功識別並掛載，直接丟棄數據，絕對不要阻塞！
+    if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED) {
+        return len; 
+    }
+
+    // 超時機制 最多等 5 次，送不出去就算了，避免死鎖
+    uint8_t timeout = 5; 
+    while(CDC_Transmit_FS((uint8_t*)ptr, len) == USBD_BUSY && timeout > 0) {
+        // 在 RTOS 環境下，儘量使用 osDelay 釋放 CPU
+        if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {
+            osDelay(1);//睡覺並讓出 CPU（非阻塞）
+        } else {
+            HAL_Delay(1); // 阻塞等待 1 毫秒 因為這時RTOS還沒有啟動 沒有其他任務
+        }
+        timeout--;
     }
     return len;
 }
@@ -111,7 +134,6 @@ int main(void)
   }
 
   // 初始化 BME280
-  BME280_Calib_Data bme_calib;
   if (BME280_Init(&hi2c1)) {
       BME280_Read_Calibration(&hi2c1, &bme_calib);
       printf("BME280 Initialized Successfully!\r\n");
@@ -125,31 +147,15 @@ int main(void)
   MX_FREERTOS_Init();
 
   /* Start scheduler */
+  // 之後，CPU 的控制權就全權交給了排程器
   osKernelStart();
 
   /* We should never get here as control is now taken by the scheduler */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  // CPU 的控制權就全權交給了排程器後就不會再跑這裡的while了
   while (1) {
-    // 準備存放數據的容器
-    MPU6050_Data accel, gyro;
-    BME280_Data bme_data;
-    
-    // 讀取 MPU6050
-    MPU6050_ReadAll(&hi2c1, &accel, &gyro);
-    
-    // 讀取 BME280
-    BME280_ReadAll(&hi2c1, &bme_calib, &bme_data);
-    
-    // 印出數據
-    printf("Acc(g): X=%.2f Y=%.2f Z=%.2f | Gyr(dps): X=%.1f Y=%.1f Z=%.1f\r\n", 
-           accel.x, accel.y, accel.z, gyro.x, gyro.y, gyro.z);
-    printf("BME280: Temp=%.2f C, Press=%.2f hPa, Hum=%.2f %%\r\n", 
-           bme_data.temp, bme_data.press / 100.0f, bme_data.hum);
-    
-    HAL_Delay(500); // 調整顯示頻率
-    
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

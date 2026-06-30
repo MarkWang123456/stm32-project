@@ -52,8 +52,8 @@ typedef struct {
 uint8_t BME280_Init(I2C_HandleTypeDef *hi2c);
 
 // 讀取校準參數：將參數從感測器讀出並存入結構體
-void BME280_Read_Calibration(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib);
+uint8_t BME280_Read_Calibration(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib);
 
 // 讀取原始數據並轉換成實體單位 (溫度攝氏度、氣壓百帕、濕度)
-void BME280_ReadAll(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib, BME280_Data *data);
+uint8_t BME280_ReadAll(I2C_HandleTypeDef *hi2c, BME280_Calib_Data *calib, BME280_Data *data);
 #endif // BME280_DRIVER_H

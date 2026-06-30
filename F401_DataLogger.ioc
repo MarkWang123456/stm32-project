@@ -2,8 +2,9 @@
 CAD.formats=
 CAD.pinconfig=
 CAD.provider=
-FREERTOS.IPParameters=Tasks01
-FREERTOS.Tasks01=defaultTask,24,128,StartDefaultTask,Default,NULL,Dynamic,NULL,NULL
+FREERTOS.FootprintOK=true
+FREERTOS.IPParameters=Tasks01,FootprintOK
+FREERTOS.Tasks01=Task_IMU,40,256,StartIMUTask,Default,NULL,Dynamic,NULL,NULL;Task_MotorSim,24,128,StartMotorSimTask,Default,NULL,Dynamic,NULL,NULL;Task_OLED,8,128,StartOLEDTask,Default,NULL,Dynamic,NULL,NULL
 File.Version=6
 GPIO.groupedBy=
 KeepUserPlacement=false
@@ -146,3 +147,4 @@ VP_SYS_VS_tim5.Signal=SYS_VS_tim5
 VP_USB_DEVICE_VS_USB_DEVICE_CDC_FS.Mode=CDC_FS
 VP_USB_DEVICE_VS_USB_DEVICE_CDC_FS.Signal=USB_DEVICE_VS_USB_DEVICE_CDC_FS
 board=custom
+rtos.0.ip=FREERTOS
