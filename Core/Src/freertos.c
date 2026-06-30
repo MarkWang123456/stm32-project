@@ -149,6 +149,10 @@ void StartIMUTask(void *argument)
   BME280_Data bme_data;
   uint32_t read_count = 0;
 
+  // 取得當前的系統時脈作為基準點 記錄下任務最後一次被喚醒的時間點
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = 5; // 5ms的頻率 每5ms要被喚醒一次。
+
   /* Infinite loop */
   for(;;)
   {
@@ -178,8 +182,10 @@ void StartIMUTask(void *argument)
         printf("BME280: Temp=%.2f C, Press=%.2f hPa, Hum=%.2f %%\r\n", 
                bme_data.temp, bme_data.press / 100.0f, bme_data.hum);
     }
-    // 200Hz ➔ 週期 5ms (非阻塞式延時，優雅讓出 CPU 控制權)
-    osDelay(5); 
+
+    // 確保下一次醒來的時間點是「上一次醒來時間 + 5ms」
+    // 即使執行時間有波動，系統也會自動調整睡眠長度來對齊節拍
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
   /* USER CODE END StartIMUTask */
 }
