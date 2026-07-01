@@ -29,6 +29,8 @@
 #include "usbd_cdc_if.h" // 引入 USB CDC 傳輸函式庫
 #include "mpu6050_driver.h"
 #include "bme280_driver.h"
+#include "ssd1306.h"
+#include "ssd1306_fonts.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -64,7 +66,117 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#include "usbd_core.h" 
+#include "usbd_core.h"
+
+/*
+ * 目前你的 I2C1 實際使用：
+ * PB6 = I2C1_SCL
+ * PB7 = I2C1_SDA
+ *
+ * MPU6050 / BME280 / OLED 都應該並聯到這一組線上。
+ */
+#define I2C1_RECOVERY_GPIO_PORT   GPIOB
+#define I2C1_RECOVERY_SCL_PIN     GPIO_PIN_6
+#define I2C1_RECOVERY_SDA_PIN     GPIO_PIN_7
+
+/*
+ * I2C1 Bus Recovery
+ *
+ * 用途：
+ *   當 STM32 被 NRST reset，但外部 I2C slave 沒有斷電時，
+ *   slave 可能還卡在上一筆 I2C transaction 中。
+ *
+ *   這時 SDA 可能被 slave 拉 Low，導致 I2C bus 不是 idle 狀態，
+ *   STM32 重新開機後就可能掃不到任何 I2C 裝置。
+ *
+ * 做法：
+ *   1. 先把 SCL/SDA 暫時改成 GPIO open-drain
+ *   2. 釋放 SCL/SDA，讓上拉電阻把線拉 High
+ *   3. 手動對 SCL 打 9 個 clock
+ *   4. 手動產生 STOP condition
+ *   5. 後面再呼叫 MX_I2C1_Init()，把 PB6/PB7 交回 I2C peripheral
+ */
+void I2C1_BusRecovery(void) {
+  //建立一個 GPIO 設定用的結構變數，並把裡面所有欄位清成 0。
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /*
+    * 要操作 GPIOB，必須先開 GPIOB clock。
+    * 因為 PB6/PB7 都屬於 GPIOB。
+    */
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*
+    * 暫時把 PB6/PB7 設成一般 GPIO open-drain 輸出。
+    *
+    * 為什麼用 open-drain？
+    *   I2C 的線路不能主動硬推 High。
+    *   High = 放手，靠上拉電阻拉到 3.3V
+    *   Low  = 晶片內部 transistor 導通到 GND
+    *
+    * 這樣才不會跟外部 MPU6050 / BME280 / OLED 打架。
+    */
+  GPIO_InitStruct.Pin = I2C1_RECOVERY_SCL_PIN | I2C1_RECOVERY_SDA_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(I2C1_RECOVERY_GPIO_PORT, &GPIO_InitStruct);
+
+  /*
+    * 先釋放 SCL / SDA。
+    * GPIO_PIN_SET   = 輸出 High
+    * GPIO_PIN_RESET = 輸出 Low
+    * 在 open-drain 模式下，WritePin SET 的意思不是主動輸出 3.3V，
+    * 而是「放手，不拉 Low」。
+    *
+    * 如果外部裝置也沒有拉 Low，
+    * SCL/SDA 會被上拉電阻拉回 High。
+    */
+  HAL_GPIO_WritePin(I2C1_RECOVERY_GPIO_PORT, I2C1_RECOVERY_SCL_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(I2C1_RECOVERY_GPIO_PORT, I2C1_RECOVERY_SDA_PIN, GPIO_PIN_SET);
+  HAL_Delay(1);
+
+  /*
+    * 手動對 SCL 打 9 個 clock。
+    *
+    * I2C 每傳 1 byte 是：
+    *   8 個 data bit + 1 個 ACK/NACK bit
+    *
+    * 如果某個 slave 卡在傳輸中間，
+    * 這 9 個 clock 可以讓它把目前這個 byte 流程走完，
+    * 有機會釋放 SDA。
+    */
+  for (int i = 0; i < 9; i++) {
+      //SCL 拉 Low
+      HAL_GPIO_WritePin(I2C1_RECOVERY_GPIO_PORT, I2C1_RECOVERY_SCL_PIN, GPIO_PIN_RESET);
+      HAL_Delay(1);
+
+      //SCL 放手，讓它回 High
+      HAL_GPIO_WritePin(I2C1_RECOVERY_GPIO_PORT, I2C1_RECOVERY_SCL_PIN, GPIO_PIN_SET);
+      HAL_Delay(1);
+  }
+
+  /*
+    * 手動產生 I2C STOP condition。
+    *
+    * STOP condition 定義：
+    *   當 SCL = High 時，SDA 從 Low 變 High。
+    * 這會告訴 I2C slave：
+    *   這筆 transaction 結束了，回到 idle 狀態。
+    */
+
+  //先確保 SDA 被拉 Low
+  HAL_GPIO_WritePin(I2C1_RECOVERY_GPIO_PORT, I2C1_RECOVERY_SDA_PIN, GPIO_PIN_RESET);
+  HAL_Delay(1);
+
+  // 確保 SCL 是 High
+  HAL_GPIO_WritePin(I2C1_RECOVERY_GPIO_PORT, I2C1_RECOVERY_SCL_PIN, GPIO_PIN_SET);
+  HAL_Delay(1);
+
+  // SDA 從 Low 釋放成 High 這一瞬間就是 STOP condition
+  HAL_GPIO_WritePin(I2C1_RECOVERY_GPIO_PORT, I2C1_RECOVERY_SDA_PIN, GPIO_PIN_SET);
+  HAL_Delay(1);
+}
 
 
 // 告訴編譯器 hUsbDeviceFS 在其他檔案裡
@@ -90,6 +202,25 @@ int _write(int file, char *ptr, int len) {
     }
     return len;
 }
+
+void I2C_Scan(void)
+{
+    printf("Scanning I2C bus...\r\n");
+
+    for (uint8_t addr = 1; addr < 128; addr++)
+    {
+        HAL_StatusTypeDef result;
+
+        result = HAL_I2C_IsDeviceReady(&hi2c1, addr << 1, 2, 20);
+
+        if (result == HAL_OK)
+        {
+            printf("I2C device found at 0x%02X\r\n", addr);
+        }
+    }
+
+    printf("I2C scan done.\r\n");
+}
 /* USER CODE END 0 */
 
 /**
@@ -107,7 +238,6 @@ int main(void)
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
-
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
@@ -121,10 +251,31 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  // 確保reset stm32會順道初始化前先 recovery
+  I2C1_BusRecovery();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-  HAL_Delay(2000); // 開機先等兩秒，讓 USB 和感測器都準備好
-  printf("===== STM32 Data Logger Booting... =====\r\n");
+  MX_USB_DEVICE_Init();
+  
+  // 給 USB Host 一點時間完成 Enumeration。
+  // MX_USB_DEVICE_Init() 只是啟動 USB Device，
+  // 不代表 Windows 已經建立好 COM Port。
+  uint32_t usb_wait_start = HAL_GetTick();
+
+  while (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED) {
+      if (HAL_GetTick() - usb_wait_start > 3000) {
+          break;
+      }
+      HAL_Delay(10);
+  }
+
+  if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
+      printf("===== STM32 Data Logger Booting... =====\r\n");
+      HAL_Delay(5000);
+  }
+
+  I2C_Scan();
+  HAL_Delay(5000);
 
    // 初始化 MPU6050
   if (MPU6050_Init(&hi2c1)) {
@@ -140,6 +291,16 @@ int main(void)
   } else {
       printf("ERROR: BME280 Init Failed!\r\n");
   }
+  
+  // 初始化 ssd1306
+  // if (ssd1306_Init()) {
+  //     // 清除顯示緩衝區
+  //     ssd1306_Fill(0x01); 
+  //     ssd1306_UpdateScreen();
+  //     printf("SSD1306 Initialized Successfully!\r\n");
+  // } else {
+  //     printf("ERROR: SSD1306 Init Failed!\r\n");
+  // }
   /* USER CODE END 2 */
 
   /* Init scheduler */

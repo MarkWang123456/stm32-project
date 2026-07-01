@@ -25,6 +25,9 @@
 #include <stdio.h>
 #include "bme280_driver.h"
 #include "mpu6050_driver.h" 
+#include "ssd1306.h"
+#include "ssd1306_fonts.h"
+#include <stdio.h> 
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -139,14 +142,13 @@ void MX_FREERTOS_Init(void) {
 // =======================================================
 void StartIMUTask(void *argument)
 {
-  /* init code for USB_DEVICE */
-  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartIMUTask */
   printf("IMU & Weather Sensor Task Started!\r\n");
-  // 任務私有局部數據，不佔用全域記憶體，執行緒安全
   // 準備存放數據的容器
-  MPU6050_Data accel, gyro;
-  BME280_Data bme_data;
+  MPU6050_Data accel = {0};
+  MPU6050_Data gyro = {0};
+  BME280_Data bme_data = {0};
+  uint8_t bme_valid = 0;
   uint32_t read_count = 0;
 
   // 取得當前的系統時脈作為基準點 記錄下任務最後一次被喚醒的時間點
@@ -165,6 +167,7 @@ void StartIMUTask(void *argument)
     // 氣象數據變化緩慢，且 ADC 轉換需要時間，不可用 200Hz 狂掃
     if (read_count % 100 == 0) {
         BME280_ReadAll(&hi2c1, &bme_calib, &bme_data);
+        bme_valid = 1;
     }
 
     // 3. 確認 I2C 總線狀態，若出錯則自動重啟
@@ -179,8 +182,12 @@ void StartIMUTask(void *argument)
     if (read_count % 20 == 0) {
         printf("Acc(g): X=%.2f Y=%.2f Z=%.2f | Gyr(dps): X=%.1f Y=%.1f Z=%.1f\r\n", 
                accel.x, accel.y, accel.z, gyro.x, gyro.y, gyro.z);
-        printf("BME280: Temp=%.2f C, Press=%.2f hPa, Hum=%.2f %%\r\n", 
-               bme_data.temp, bme_data.press / 100.0f, bme_data.hum);
+        if (bme_valid) {
+          printf("BME280: Temp=%.2f C, Press=%.2f hPa, Hum=%.2f %%\r\n", 
+                bme_data.temp, bme_data.press / 100.0f, bme_data.hum);
+        } else {
+            printf("BME280: waiting first sample...\r\n");
+    }
     }
 
     // 確保下一次醒來的時間點是「上一次醒來時間 + 5ms」
@@ -228,12 +235,21 @@ void StartMotorSimTask(void *argument)
 // =======================================================
 void StartOLEDTask(void *argument)
 {
-  /* USER CODE BEGIN StartOLEDTask */
-  printf("OLED HMI Display Task Started!\r\n");
-  /* Infinite loop */
+  // /* USER CODE BEGIN StartOLEDTask */
+  // printf("OLED HMI Display Task Started!\r\n");
+  // /* Infinite loop */
+  // char display_buffer[32];
+  // int counter = 0;
   for(;;)
   {
-    osDelay(100); // 10Hz
+    // sprintf(display_buffer, "Hello STM32! Count: %d", counter);
+    // ssd1306_Fill(Black);
+    // ssd1306_SetCursor(0, 0);
+    // ssd1306_WriteString(display_buffer , Font_7x10, White);
+    // ssd1306_UpdateScreen(); // 將畫面同步更新至實體螢幕
+    
+    // counter++;
+    osDelay(100); // 10Hz 更新頻率
   }
   /* USER CODE END StartOLEDTask */
 }
