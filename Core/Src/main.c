@@ -271,11 +271,12 @@ int main(void)
 
   if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
       printf("===== STM32 Data Logger Booting... =====\r\n");
-      HAL_Delay(5000);
+      HAL_Delay(3000);
   }
 
+  //第一次掃描：確認硬體接線與三個 I2C slave 都存在
   I2C_Scan();
-  HAL_Delay(5000);
+  HAL_Delay(3000);
 
    // 初始化 MPU6050
   if (MPU6050_Init(&hi2c1)) {
@@ -293,18 +294,24 @@ int main(void)
   }
   
   // 初始化 ssd1306
-  // if (ssd1306_Init()) {
-  //     // 清除顯示緩衝區
-  //     ssd1306_Fill(0x01); 
-  //     ssd1306_UpdateScreen();
-  //     printf("SSD1306 Initialized Successfully!\r\n");
-  // } else {
-  //     printf("ERROR: SSD1306 Init Failed!\r\n");
-  // }
+  if (ssd1306_Init()) {
+      // 清除顯示緩衝區
+      // ssd1306_Fill(0x01); 
+      // ssd1306_UpdateScreen();
+      printf("SSD1306 Initialized Successfully!\r\n");
+  } else {
+      printf("ERROR: SSD1306 Init Failed!\r\n");
+  }
+
+  //第二次掃描：確認 OLED 初始化後，I2C bus 沒被搞壞
+  I2C_Scan();
+  printf("I2C scan after SSD1306 init done.\r\n");
   /* USER CODE END 2 */
 
   /* Init scheduler */
+  // 初始化 RTOS kernel 本體
   osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
+  // 建立我自己的 RTOS 物件
   MX_FREERTOS_Init();
 
   /* Start scheduler */

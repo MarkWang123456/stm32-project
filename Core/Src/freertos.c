@@ -115,7 +115,7 @@ void MX_FREERTOS_Init(void) {
   Task_IMUHandle = osThreadNew(StartIMUTask, NULL, &Task_IMU_attributes);
 
   /* creation of Task_MotorSim */
-  Task_MotorSimHandle = osThreadNew(StartMotorSimTask, NULL, &Task_MotorSim_attributes);
+  //Task_MotorSimHandle = osThreadNew(StartMotorSimTask, NULL, &Task_MotorSim_attributes);
 
   /* creation of Task_OLED */
   Task_OLEDHandle = osThreadNew(StartOLEDTask, NULL, &Task_OLED_attributes);
@@ -140,8 +140,7 @@ void MX_FREERTOS_Init(void) {
 // =======================================================
 // 任務 1：高優先權 - IMU 數據採樣任務 (執行頻率 200Hz)
 // =======================================================
-void StartIMUTask(void *argument)
-{
+void StartIMUTask(void *argument) {
   /* USER CODE BEGIN StartIMUTask */
   printf("IMU & Weather Sensor Task Started!\r\n");
   // 準備存放數據的容器
@@ -151,20 +150,21 @@ void StartIMUTask(void *argument)
   uint8_t bme_valid = 0;
   uint32_t read_count = 0;
 
+  // FreeRTOSConfig.h中設定的configTICK_RATE_HZ = 1000，表示每千分之一秒會產生一次tick interrupt
   // 取得當前的系統時脈作為基準點 記錄下任務最後一次被喚醒的時間點
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = 5; // 5ms的頻率 每5ms要被喚醒一次。
+  // 10ms的頻率 每10ms要被喚醒一次。換算下來也就是100Hz
+  TickType_t xFrequency = 10; 
 
   /* Infinite loop */
-  for(;;)
-  {
+  for(;;) {
     read_count++;
 
     // 1. 讀取 MPU6050
     MPU6050_ReadAll(&hi2c1, &accel, &gyro);
 
-    // 2. BME280 讀取：降頻至 2Hz (每 500ms = 100 次 loop 才執行一次)
-    // 氣象數據變化緩慢，且 ADC 轉換需要時間，不可用 200Hz 狂掃
+    // 2. BME280 讀取：降頻至 1Hz (每秒讀一次)
+    // 氣象數據變化緩慢，且 ADC 轉換需要時間，不可用 100Hz 狂掃
     if (read_count % 100 == 0) {
         BME280_ReadAll(&hi2c1, &bme_calib, &bme_data);
         bme_valid = 1;
@@ -175,11 +175,10 @@ void StartIMUTask(void *argument)
         __HAL_I2C_DISABLE(&hi2c1);
         osDelay(1);
         __HAL_I2C_ENABLE(&hi2c1);
-        continue;
     }
 
-    // 4. 終端機印出：降頻至 10Hz (每 100ms = 20 次 loop 才執行一次)
-    if (read_count % 20 == 0) {
+    // 4. 終端機印出：降頻至 10Hz (每秒印 10 次)
+    if (read_count % 10 == 0) {
         printf("Acc(g): X=%.2f Y=%.2f Z=%.2f | Gyr(dps): X=%.1f Y=%.1f Z=%.1f\r\n", 
                accel.x, accel.y, accel.z, gyro.x, gyro.y, gyro.z);
         if (bme_valid) {
@@ -190,7 +189,7 @@ void StartIMUTask(void *argument)
     }
     }
 
-    // 確保下一次醒來的時間點是「上一次醒來時間 + 5ms」
+    // 確保下一次醒來的時間點是「上一次醒來時間 + 10ms」
     // 即使執行時間有波動，系統也會自動調整睡眠長度來對齊節拍
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
@@ -233,23 +232,24 @@ void StartMotorSimTask(void *argument)
 // =======================================================
 // 任務 3：低優先權 - OLED 顯示與 HMI 任務 (執行頻率 10Hz)
 // =======================================================
-void StartOLEDTask(void *argument)
-{
-  // /* USER CODE BEGIN StartOLEDTask */
-  // printf("OLED HMI Display Task Started!\r\n");
-  // /* Infinite loop */
-  // char display_buffer[32];
-  // int counter = 0;
+void StartOLEDTask(void *argument){
+  /* USER CODE BEGIN StartOLEDTask */
+  printf("OLED HMI Display Task Started!\r\n");
+  /* Infinite loop */
+  char display_buffer[32];
+  int counter = 0;
   for(;;)
   {
-    // sprintf(display_buffer, "Hello STM32! Count: %d", counter);
-    // ssd1306_Fill(Black);
-    // ssd1306_SetCursor(0, 0);
-    // ssd1306_WriteString(display_buffer , Font_7x10, White);
-    // ssd1306_UpdateScreen(); // 將畫面同步更新至實體螢幕
+    sprintf(display_buffer, "Count: %d", counter);
+    ssd1306_Fill(Black);
+    ssd1306_SetCursor(0, 0);
+    ssd1306_WriteString("Hello STM32!" , Font_7x10, White);
+    ssd1306_SetCursor(0, 12);
+    ssd1306_WriteString(display_buffer, Font_7x10, White);
+    ssd1306_UpdateScreen(); // 將畫面同步更新至實體螢幕
     
-    // counter++;
-    osDelay(100); // 10Hz 更新頻率
+    counter++;
+    osDelay(1000); // 更新頻率
   }
   /* USER CODE END StartOLEDTask */
 }
