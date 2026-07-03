@@ -22,15 +22,16 @@
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "bme280_driver.h"
 #include "mpu6050_driver.h" 
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
 #include <stdio.h> 
-
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
+#include "semphr.h"
 extern I2C_HandleTypeDef hi2c1;
 extern BME280_Calib_Data bme_calib; // 引用 main.c 宣告的全域 BME280 校準參數
 /* USER CODE END Includes */
@@ -52,11 +53,6 @@ extern BME280_Calib_Data bme_calib; // 引用 main.c 宣告的全域 BME280 校�
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-// osMutexId_t是freertos操作mutex時要用的Handle
-osMutexId_t I2C1MutexHandle;
-const osMutexAttr_t I2C1Mutex_attributes = {
-  .name = "I2C1Mutex"
-};
 
 /* USER CODE END Variables */
 /* Definitions for Task_IMU */
@@ -77,7 +73,7 @@ const osThreadAttr_t Task_MotorSim_attributes = {
 osThreadId_t Task_OLEDHandle;
 const osThreadAttr_t Task_OLED_attributes = {
   .name = "Task_OLED",
-  .stack_size = 512 * 4,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 
@@ -103,11 +99,6 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  // 使用I2C1Mutex_attributes建立一個新的mutex
-  // osMutexNew() 會回傳這個 mutex 的 handle
-  // 將回傳的 handle 存到 I2C1MutexHandle，之後用它來 lock / unlock
-  I2C1MutexHandle = osMutexNew(&I2C1Mutex_attributes);
-
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -122,14 +113,17 @@ void MX_FREERTOS_Init(void) {
   /* Create the thread(s) */
   /* creation of Task_IMU */
   // 用StartIMUTask建立新執行緒
+  printf("before Task_IMU\r\n");
   Task_IMUHandle = osThreadNew(StartIMUTask, NULL, &Task_IMU_attributes);
+  printf("after Task_IMU, handle=%p\r\n", Task_IMUHandle);
 
   /* creation of Task_MotorSim */
   //Task_MotorSimHandle = osThreadNew(StartMotorSimTask, NULL, &Task_MotorSim_attributes);
 
   /* creation of Task_OLED */
+  printf("before Task_OLED\r\n");
   Task_OLEDHandle = osThreadNew(StartOLEDTask, NULL, &Task_OLED_attributes);
-
+  printf("after Task_OLED, handle=%p\r\n", Task_OLEDHandle);
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -146,10 +140,6 @@ void MX_FREERTOS_Init(void) {
   * @retval None
   */
 /* USER CODE END Header_StartIMUTask */
-
-// =======================================================
-// 任務 1：高優先權 - IMU 數據採樣任務 (執行頻率 200Hz)
-// =======================================================
 void StartIMUTask(void *argument) {
   /* USER CODE BEGIN StartIMUTask */
   printf("IMU & Weather Sensor Task Started!\r\n");
@@ -172,29 +162,21 @@ void StartIMUTask(void *argument) {
     read_count++;
 
     // 1. 讀取 MPU6050
-    if (osMutexAcquire(I2C1MutexHandle, osWaitForever) == osOK) {
-      MPU6050_ReadAll(&hi2c1, &accel, &gyro);
-      osMutexRelease(I2C1MutexHandle);
-    } 
+    MPU6050_ReadAll(&hi2c1, &accel, &gyro);
 
     // 2. BME280 讀取：降頻至 1Hz (每秒讀一次)
     // 氣象數據變化緩慢，且 ADC 轉換需要時間，不可用 100Hz 狂掃
     if (read_count % 100 == 0) {
-      if (osMutexAcquire(I2C1MutexHandle, osWaitForever) == osOK) {
-          BME280_ReadAll(&hi2c1, &bme_calib, &bme_data);
-          osMutexRelease(I2C1MutexHandle);
-          bme_valid = 1;
-      }   
+      BME280_ReadAll(&hi2c1, &bme_calib, &bme_data);
+      bme_valid = 1; 
     }
 
     // 3. 確認 I2C 總線狀態，若出錯則自動重啟
-    if (osMutexAcquire(I2C1MutexHandle, osWaitForever) == osOK) {
-        if (HAL_I2C_GetState(&hi2c1) != HAL_I2C_STATE_READY) {
-            __HAL_I2C_DISABLE(&hi2c1);
-            osDelay(1);
-            __HAL_I2C_ENABLE(&hi2c1);
-        }
-        osMutexRelease(I2C1MutexHandle);
+  
+    if (HAL_I2C_GetState(&hi2c1) != HAL_I2C_STATE_READY) {
+        __HAL_I2C_DISABLE(&hi2c1);
+        osDelay(1);
+        __HAL_I2C_ENABLE(&hi2c1);
     }
 
     // 4. 終端機印出：降頻至 1Hz (每秒印 1 次)
@@ -228,9 +210,6 @@ void StartIMUTask(void *argument) {
 * @retval None
 */
 /* USER CODE END Header_StartMotorSimTask */
-// =======================================================
-// 任務 2：中優先權 - 馬達控制與模擬任務 (執行頻率 50Hz)
-// =======================================================
 void StartMotorSimTask(void *argument)
 {
   /* USER CODE BEGIN StartMotorSimTask */
@@ -243,10 +222,6 @@ void StartMotorSimTask(void *argument)
   /* USER CODE END StartMotorSimTask */
 }
 
-
-// =======================================================
-// 任務 3：低優先權 - OLED 顯示與 HMI 任務 (10Hz)
-// =======================================================
 /* USER CODE BEGIN Header_StartOLEDTask */
 /**
 * @brief Function implementing the Task_OLED thread.
@@ -254,10 +229,8 @@ void StartMotorSimTask(void *argument)
 * @retval None
 */
 /* USER CODE END Header_StartOLEDTask */
-// =======================================================
-// 任務 3：低優先權 - OLED 顯示與 HMI 任務 (執行頻率 10Hz)
-// =======================================================
-void StartOLEDTask(void *argument){
+void StartOLEDTask(void *argument)
+{
   /* USER CODE BEGIN StartOLEDTask */
   printf("OLED HMI Display Task Started!\r\n");
   /* Infinite loop */
@@ -276,10 +249,7 @@ void StartOLEDTask(void *argument){
   
     // 取得I2C1MutexHandle的鎖 如果鎖被別人拿走 就一直等到拿到為止(osWaitForever)
     TickType_t oled_start = xTaskGetTickCount();
-    if (osMutexAcquire(I2C1MutexHandle, osWaitForever) == osOK) {
-        ssd1306_UpdateScreen();
-        osMutexRelease(I2C1MutexHandle);
-    }
+    ssd1306_UpdateScreen();
 
     TickType_t oled_end = xTaskGetTickCount();
     printf("OLED UpdateScreen time = %lu ms\r\n", 

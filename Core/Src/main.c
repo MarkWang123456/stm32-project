@@ -193,7 +193,7 @@ int _write(int file, char *ptr, int len) {
     uint8_t timeout = 5; 
     while(CDC_Transmit_FS((uint8_t*)ptr, len) == USBD_BUSY && timeout > 0) {
         // 在 RTOS 環境下，儘量使用 osDelay 釋放 CPU
-        if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {
+        if (osKernelGetState() != osKernelRunning) {
             osDelay(1);//睡覺並讓出 CPU（非阻塞）
         } else {
             HAL_Delay(1); // 阻塞等待 1 毫秒 因為這時RTOS還沒有啟動 沒有其他任務
@@ -203,15 +203,15 @@ int _write(int file, char *ptr, int len) {
     return len;
 }
 
-void I2C_Scan(void)
+void I2C_Scan(I2C_HandleTypeDef *hi2c, const char *bus_name)
 {
-    printf("Scanning I2C bus...\r\n");
+    printf("Scanning I2C bus %s...\r\n", bus_name);
 
     for (uint8_t addr = 1; addr < 128; addr++)
     {
         HAL_StatusTypeDef result;
 
-        result = HAL_I2C_IsDeviceReady(&hi2c1, addr << 1, 2, 20);
+        result = HAL_I2C_IsDeviceReady(hi2c, addr << 1, 2, 20);
 
         if (result == HAL_OK)
         {
@@ -238,6 +238,7 @@ int main(void)
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
@@ -254,6 +255,7 @@ int main(void)
   // 確保reset stm32會順道初始化前先 recovery
   I2C1_BusRecovery();
   MX_I2C1_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   MX_USB_DEVICE_Init();
   
@@ -275,7 +277,8 @@ int main(void)
   }
 
   //第一次掃描：確認硬體接線與三個 I2C slave 都存在
-  I2C_Scan();
+  I2C_Scan(&hi2c1, "I2C1");
+  I2C_Scan(&hi2c2, "I2C2");
   HAL_Delay(3000);
 
    // 初始化 MPU6050
@@ -304,7 +307,8 @@ int main(void)
   }
 
   //第二次掃描：確認 OLED 初始化後，I2C bus 沒被搞壞
-  I2C_Scan();
+  I2C_Scan(&hi2c1, "I2C1");
+  I2C_Scan(&hi2c2, "I2C2");
   printf("I2C scan after SSD1306 init done.\r\n");
   /* USER CODE END 2 */
 
