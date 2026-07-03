@@ -53,6 +53,11 @@ extern BME280_Calib_Data bme_calib; // 引用 main.c 宣告的全域 BME280 校�
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+// osMutexId_t是freertos操作mutex時要用的Handle
+osMutexId_t I2C1MutexHandle;
+const osMutexAttr_t I2C1Mutex_attributes = {
+  .name = "I2C1Mutex"
+};
 
 /* USER CODE END Variables */
 /* Definitions for Task_IMU */
@@ -99,6 +104,10 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
+  // 使用I2C1Mutex_attributes建立一個新的mutex
+  // osMutexNew() 會回傳這個 mutex 的 handle
+  // 將回傳的 handle 存到 I2C1MutexHandle，之後用它來 lock / unlock
+  I2C1MutexHandle = osMutexNew(&I2C1Mutex_attributes); 
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -162,21 +171,29 @@ void StartIMUTask(void *argument) {
     read_count++;
 
     // 1. 讀取 MPU6050
-    MPU6050_ReadAll(&hi2c1, &accel, &gyro);
+    if (osMutexAcquire(I2C1MutexHandle, osWaitForever) == osOK) {
+      MPU6050_ReadAll(&hi2c1, &accel, &gyro);
+      osMutexRelease(I2C1MutexHandle);
+    } 
 
     // 2. BME280 讀取：降頻至 1Hz (每秒讀一次)
     // 氣象數據變化緩慢，且 ADC 轉換需要時間，不可用 100Hz 狂掃
     if (read_count % 100 == 0) {
-      BME280_ReadAll(&hi2c1, &bme_calib, &bme_data);
-      bme_valid = 1; 
+      if (osMutexAcquire(I2C1MutexHandle, osWaitForever) == osOK) {
+          BME280_ReadAll(&hi2c1, &bme_calib, &bme_data);
+          osMutexRelease(I2C1MutexHandle);
+          bme_valid = 1;
+      }  
     }
 
     // 3. 確認 I2C 總線狀態，若出錯則自動重啟
-  
-    if (HAL_I2C_GetState(&hi2c1) != HAL_I2C_STATE_READY) {
-        __HAL_I2C_DISABLE(&hi2c1);
-        osDelay(1);
-        __HAL_I2C_ENABLE(&hi2c1);
+    if (osMutexAcquire(I2C1MutexHandle, osWaitForever) == osOK) {
+      if (HAL_I2C_GetState(&hi2c1) != HAL_I2C_STATE_READY) {
+          __HAL_I2C_DISABLE(&hi2c1);
+          osDelay(1);
+          __HAL_I2C_ENABLE(&hi2c1);
+      }
+      osMutexRelease(I2C1MutexHandle);
     }
 
     // 4. 終端機印出：降頻至 1Hz (每秒印 1 次)
@@ -244,12 +261,10 @@ void StartOLEDTask(void *argument)
     ssd1306_WriteString("Hello STM32!" , Font_7x10, White);
     ssd1306_SetCursor(0, 12);
     ssd1306_WriteString(display_buffer, Font_7x10, White);
-    //ssd1306_UpdateScreen(); // 將畫面同步更新至實體螢幕
-
   
     // 取得I2C1MutexHandle的鎖 如果鎖被別人拿走 就一直等到拿到為止(osWaitForever)
     TickType_t oled_start = xTaskGetTickCount();
-    ssd1306_UpdateScreen();
+    ssd1306_UpdateScreen();// 將畫面同步更新至實體螢幕
 
     TickType_t oled_end = xTaskGetTickCount();
     printf("OLED UpdateScreen time = %lu ms\r\n", 
