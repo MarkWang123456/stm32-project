@@ -30,8 +30,8 @@
 #include "mpu6050_driver.h" 
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
-#include <stdio.h> 
 #include "semphr.h"
+#include "system_packet.h"
 extern I2C_HandleTypeDef hi2c1;
 extern BME280_Calib_Data bme_calib; // 引用 main.c 宣告的全域 BME280 校準參數
 /* USER CODE END Includes */
@@ -58,8 +58,8 @@ osMutexId_t I2C1MutexHandle;
 const osMutexAttr_t I2C1Mutex_attributes = {
   .name = "I2C1Mutex"
 };
-
 /* USER CODE END Variables */
+
 /* Definitions for Task_IMU */
 osThreadId_t Task_IMUHandle;
 const osThreadAttr_t Task_IMU_attributes = {
@@ -82,6 +82,14 @@ const osThreadAttr_t Task_OLED_attributes = {
   .priority = (osPriority_t) osPriorityLow,
 };
 
+/* Definitions for Task_Debug */
+osThreadId_t Task_DebugHandle;
+const osThreadAttr_t Task_Debug_attributes = {
+  .name = "Task_Debug",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
@@ -90,6 +98,7 @@ const osThreadAttr_t Task_OLED_attributes = {
 void StartIMUTask(void *argument);
 void StartMotorSimTask(void *argument);
 void StartOLEDTask(void *argument);
+void StartDebugTask(void *argument);
 
 extern void MX_USB_DEVICE_Init(void);
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
@@ -122,17 +131,16 @@ void MX_FREERTOS_Init(void) {
   /* Create the thread(s) */
   /* creation of Task_IMU */
   // 用StartIMUTask建立新執行緒
-  printf("before Task_IMU\r\n");
   Task_IMUHandle = osThreadNew(StartIMUTask, NULL, &Task_IMU_attributes);
-  printf("after Task_IMU, handle=%p\r\n", Task_IMUHandle);
 
   /* creation of Task_MotorSim */
   //Task_MotorSimHandle = osThreadNew(StartMotorSimTask, NULL, &Task_MotorSim_attributes);
 
   /* creation of Task_OLED */
-  printf("before Task_OLED\r\n");
   Task_OLEDHandle = osThreadNew(StartOLEDTask, NULL, &Task_OLED_attributes);
-  printf("after Task_OLED, handle=%p\r\n", Task_OLEDHandle);
+
+  /* creation of Task_Debug */
+  Task_DebugHandle = osThreadNew(StartDebugTask, NULL, &Task_Debug_attributes);
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -275,6 +283,21 @@ void StartOLEDTask(void *argument)
   }
   /* USER CODE END StartOLEDTask */
 }
+
+void StartDebugTask(void *argument)
+{
+    osDelay(1500);  // 等 USB CDC enumeration 穩定
+
+    printf("\r\n[DebugTask] USB CDC ready\r\n");
+
+    SystemPacket_GoldenPacketTest();
+
+    for (;;)
+    {
+        osDelay(1000);
+    }
+}
+
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */

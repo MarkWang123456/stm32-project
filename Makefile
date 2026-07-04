@@ -43,6 +43,7 @@ Core/Src/stm32f4xx_it.c \
 Core/Src/stm32f4xx_hal_msp.c \
 Core/Src/bme280_driver.c \
 Core/Src/mpu6050_driver.c \
+Core/Src/system_packet.c \
 Core/ssd1306/ssd1306.c \
 Core/ssd1306/ssd1306_fonts.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c \
