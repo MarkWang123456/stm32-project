@@ -33,53 +33,81 @@
 #define MPU_LOG_EVERY_SAMPLES   100U
 /* USER CODE END PD */
 
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-osThreadId_t testTaskHandle;
-
-const osThreadAttr_t testTask_attributes =
-{
-    .name = "TestTask",
-
-    /*
-     * 2048 bytes provides more headroom for USB printf() with float formats.
-     * This task is dynamically allocated through heap_4.c.
-     */
-    .stack_size = 2048U,
-    .priority = (osPriority_t)osPriorityNormal,
-};
 /* USER CODE END Variables */
+/* Definitions for testTask */
+osThreadId_t testTaskHandle;
+const osThreadAttr_t testTask_attributes = {
+  .name = "testTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-static void StartTestTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
-void MX_FREERTOS_Init(void);
+void StartTestTask(void *argument);
+void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /**
-  * @brief FreeRTOS initialization.
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
   */
-void MX_FREERTOS_Init(void)
-{
-    /*
-     * Only one task is created in this baseline.
-     * No mutex, BME280 task, OLED task, timer or queue is created.
-     */
-    testTaskHandle =
-        osThreadNew(StartTestTask, NULL, &testTask_attributes);
+void MX_FREERTOS_Init(void) {
+  /* USER CODE BEGIN Init */
 
-    if (testTaskHandle == NULL)
-    {
-        Error_Handler();
-    }
+  /* USER CODE END Init */
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of testTask */
+  testTaskHandle = osThreadNew(StartTestTask, NULL, &testTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  if (testTaskHandle == NULL) {
+    Error_Handler();
+  }
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
 }
 
+/* USER CODE BEGIN Header_StartTestTask */
 /**
-  * @brief  Read MPU6050 at 100 Hz and print data at 1 Hz.
+  * @brief  Function implementing the testTask thread.
+  * @param  argument: Not used
+  * @retval None
   */
-static void StartTestTask(void *argument)
-{
+/* USER CODE END Header_StartTestTask */
+void StartTestTask(void *argument) {
+    /* USER CODE BEGIN StartTestTask */
+
     (void)argument;
 
     MPU6050_Data accel = {0};
@@ -91,21 +119,25 @@ static void StartTestTask(void *argument)
         pdMS_TO_TICKS(MPU_SAMPLE_PERIOD_MS);
 
     /*
-     * Allow Windows time to finish USB CDC enumeration.
-     * xLastWakeTime must be captured after this initial delay.
-     */
+    * Allow Windows time to finish USB CDC enumeration.
+    * USB has already been initialized once in main.c.
+    */
     osDelay(2000U);
 
     printf("\r\nStartTestTask started.\r\n");
     printf("MPU6050 sampling: 100 Hz, USB log: 1 Hz\r\n");
 
+    /*
+    * Capture the initial wake time after the enumeration delay,
+    * otherwise vTaskDelayUntil() would try to catch up immediately.
+    */
     TickType_t xLastWakeTime = xTaskGetTickCount();
 
-    for (;;)
-    {
+    for (;;) {
         /*
-         * This is currently the only I2C1 user, so no mutex is needed.
-         */
+        * This is currently the only I2C1 user,
+        * so no I2C mutex is required.
+        */
         MPU6050_ReadAll(&hi2c1, &accel, &gyro);
 
         sampleCount++;
@@ -114,7 +146,7 @@ static void StartTestTask(void *argument)
         {
             sampleCount = 0U;
 
-            /* Task heartbeat: toggle onboard LED once per second. */
+            /* One-second heartbeat. */
             HAL_GPIO_TogglePin(TEST_LED_PORT, TEST_LED_PIN);
 
             printf(
@@ -131,8 +163,10 @@ static void StartTestTask(void *argument)
 
         vTaskDelayUntil(&xLastWakeTime, samplePeriod);
     }
+    /* USER CODE END StartTestTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 /* USER CODE END Application */
+
