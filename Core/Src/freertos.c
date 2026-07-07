@@ -105,8 +105,9 @@ void MX_FREERTOS_Init(void) {
   * @retval None
   */
 /* USER CODE END Header_StartTestTask */
-void StartTestTask(void *argument) {
-    /* USER CODE BEGIN StartTestTask */
+void StartTestTask(void *argument)
+{
+  /* USER CODE BEGIN StartTestTask */
 
     (void)argument;
 
@@ -163,7 +164,7 @@ void StartTestTask(void *argument) {
 
         vTaskDelayUntil(&xLastWakeTime, samplePeriod);
     }
-    /* USER CODE END StartTestTask */
+  /* USER CODE END StartTestTask */
 }
 
 /* Private application code --------------------------------------------------*/
