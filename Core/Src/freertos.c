@@ -17,6 +17,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "i2c.h"
+#include "spi.h"
 #include "mpu6050_driver.h"
 /* USER CODE END Includes */
 
@@ -40,6 +41,11 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+uint8_t spi_rx_buf[4] = {0};
+uint8_t spi_tx_buf[4] = {0xAA, 0xBB, 0xCC, 0xDD};
+volatile uint8_t spi_txrx_done = 0;
+volatile uint8_t spi_error_seen = 0U;
+volatile uint32_t spi_error_code = HAL_SPI_ERROR_NONE;
 /* USER CODE END Variables */
 /* Definitions for testTask */
 osThreadId_t testTaskHandle;
@@ -51,6 +57,7 @@ const osThreadAttr_t testTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
+static void SPI_StartTransfer(void);
 /* USER CODE END FunctionPrototypes */
 
 void StartTestTask(void *argument);
@@ -124,6 +131,8 @@ void StartTestTask(void *argument)
     * USB has already been initialized once in main.c.
     */
     osDelay(2000U);
+    
+    SPI_StartTransfer();
 
     printf("\r\nStartTestTask started.\r\n");
     printf("MPU6050 sampling: 100 Hz, USB log: 1 Hz\r\n");
@@ -162,6 +171,31 @@ void StartTestTask(void *argument)
             );
         }
 
+        if (spi_txrx_done != 0U)
+        {
+          spi_txrx_done = 0U;
+
+          printf(
+              "SPI RX: %02X %02X %02X %02X\r\n",
+              spi_rx_buf[0],
+              spi_rx_buf[1],
+              spi_rx_buf[2],
+              spi_rx_buf[3]
+          );
+
+          SPI_StartTransfer();
+        }
+      if (spi_error_seen != 0U)
+      {
+          uint32_t error = spi_error_code;
+
+          spi_error_seen = 0U;
+
+          printf(
+              "SPI ERROR: 0x%08lX\r\n",
+              (unsigned long)error
+          );
+      }
         vTaskDelayUntil(&xLastWakeTime, samplePeriod);
     }
   /* USER CODE END StartTestTask */
@@ -169,5 +203,36 @@ void StartTestTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+static void SPI_StartTransfer(void)
+{
+    if (HAL_SPI_TransmitReceive_IT(
+            &hspi1,
+            spi_tx_buf,
+            spi_rx_buf,
+            4U) != HAL_OK)
+    {
+        printf("SPI TxRx start failed.\r\n");
+    }
+    else
+    {
+        printf("SPI waiting for 4-byte full-duplex transfer...\r\n");
+    }
+}
+
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+    if (hspi->Instance == SPI1) {
+        spi_txrx_done = 1U;
+    }
+}
+
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
+{
+    if (hspi->Instance == SPI1)
+    {
+        spi_error_code = HAL_SPI_GetError(hspi);
+        spi_error_seen = 1U;
+    }
+}
 /* USER CODE END Application */
 

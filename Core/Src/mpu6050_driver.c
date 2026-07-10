@@ -2,24 +2,67 @@
 
 // MPU6050 初始化函式：檢查 ID 並載入預設設定
 uint8_t MPU6050_Init(I2C_HandleTypeDef *hi2c) {
-    uint8_t check, data;
+    uint8_t check = 0U;
+    uint8_t data = 0U;
+    HAL_Delay(100U);
 
     // 1. 檢查 WHO_AM_I 暫存器，確認硬體連線狀態
-    HAL_I2C_Mem_Read(hi2c, MPU6050_ADDR, MPU6050_WHO_AM_I, I2C_MEMADD_SIZE_8BIT, &check, 1, 1000);
+        if (HAL_I2C_Mem_Read(
+            hi2c,
+            MPU6050_ADDR,
+            MPU6050_WHO_AM_I,
+            I2C_MEMADD_SIZE_8BIT,
+            &check,
+            1U,
+            1000U) != HAL_OK)
+    {
+        return 0U;
+    }
     if (check != MPU6050_WHO_AM_I_VALUE) return 0; // 若 ID 不符，返回錯誤
 
     // 2. 喚醒 MPU6050：寫入預設電源管理設定 (取消睡眠模式)
     data = MPU6050_DEFAULT_PWR_MGMT;
-    HAL_I2C_Mem_Write(hi2c, MPU6050_ADDR, MPU6050_PWR_MGMT_1, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+    if (HAL_I2C_Mem_Write(
+        hi2c,
+        MPU6050_ADDR,
+        MPU6050_PWR_MGMT_1,
+        I2C_MEMADD_SIZE_8BIT,
+        &data,
+        1U,
+        1000U) != HAL_OK)
+    {
+        return 0U;
+    }
+
+    HAL_Delay(100U);
 
     // 3. 設定採樣率分頻：決定數據更新頻率
     data = MPU6050_DEFAULT_SMPLRT_DIV;
-    HAL_I2C_Mem_Write(hi2c, MPU6050_ADDR, MPU6050_SMPLRT_DIV, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+    if (HAL_I2C_Mem_Write(
+            hi2c,
+            MPU6050_ADDR,
+            MPU6050_SMPLRT_DIV,
+            I2C_MEMADD_SIZE_8BIT,
+            &data,
+            1U,
+            1000U) != HAL_OK)
+    {
+        return 0U;
+    }
 
     // 4. 設定 DLPF (數位低通濾波器)：平滑化加速度與陀螺儀數據
     data = MPU6050_DEFAULT_CONFIG;
-    HAL_I2C_Mem_Write(hi2c, MPU6050_ADDR, MPU6050_CONFIG, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
-
+    if (HAL_I2C_Mem_Write(
+            hi2c,
+            MPU6050_ADDR,
+            MPU6050_CONFIG,
+            I2C_MEMADD_SIZE_8BIT,
+            &data,
+            1U,
+            1000U) != HAL_OK)
+    {
+        return 0U;
+    }
     return 1; // 初始化成功
 }
 
