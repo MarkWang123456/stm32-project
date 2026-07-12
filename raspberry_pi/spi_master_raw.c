@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stddef.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -12,6 +13,148 @@
 #define SPI_BITS_PER_WORD   8U
 #define SPI_SPEED_HZ        10000U
 #define SPI_RAW_DATA_SIZE   60U
+#define SYSTEM_PACKET_VERSION      0U
+#define SYSTEM_PACKET_HEADER_SIZE  16U
+#define SYSTEM_PACKET_SIZE         60U
+#define SYSTEM_PACKET_MAGIC        0x30504453U
+
+typedef struct __attribute__((packed))
+{
+    uint32_t magic;
+    uint8_t  version;
+    uint8_t  header_size;
+    uint16_t packet_size;
+
+    uint32_t sequence;
+    uint32_t timestamp_ms;
+
+    int16_t accel_x_raw;
+    int16_t accel_y_raw;
+    int16_t accel_z_raw;
+    int16_t gyro_x_raw;
+    int16_t gyro_y_raw;
+    int16_t gyro_z_raw;
+
+    int32_t  temperature_c_x100;
+    uint32_t pressure_pa;
+    uint32_t humidity_percent_x100;
+
+    uint16_t sensor_status;
+    uint16_t system_flags;
+
+    uint32_t imu_late_count;
+    uint32_t i2c_error_count;
+    uint32_t i2c_recovery_count;
+
+    uint32_t checksum32;
+} SystemDataPacketV0;
+
+_Static_assert(
+    sizeof(SystemDataPacketV0) == SYSTEM_PACKET_SIZE,
+    "SystemDataPacketV0 size must be 60 bytes"
+);
+
+static uint32_t calculate_checksum32(const SystemDataPacketV0 *packet)
+{
+    const uint8_t *bytes = (const uint8_t *)packet;
+    uint32_t sum = 0U;
+
+    for (size_t i = 0; i < offsetof(SystemDataPacketV0, checksum32); i++) {
+        sum += bytes[i];
+    }
+
+    return sum;
+}
+
+static int validate_packet_header(const SystemDataPacketV0 *packet)
+{
+    if (packet->magic != SYSTEM_PACKET_MAGIC) {
+        fprintf(
+            stderr,
+            "Invalid packet magic: expected=0x%08X, actual=0x%08X\n",
+            SYSTEM_PACKET_MAGIC,
+            packet->magic
+        );
+        return -1;
+    }
+
+    if (packet->version != SYSTEM_PACKET_VERSION) {
+        fprintf(
+            stderr,
+            "Invalid packet version: expected=%u, actual=%u\n",
+            SYSTEM_PACKET_VERSION,
+            packet->version
+        );
+        return -1;
+    }
+
+    if (packet->header_size != SYSTEM_PACKET_HEADER_SIZE) {
+        fprintf(
+            stderr,
+            "Invalid header size: expected=%u, actual=%u\n",
+            SYSTEM_PACKET_HEADER_SIZE,
+            packet->header_size
+        );
+        return -1;
+    }
+
+    if (packet->packet_size != SYSTEM_PACKET_SIZE) {
+        fprintf(
+            stderr,
+            "Invalid packet size: expected=%u, actual=%u\n",
+            SYSTEM_PACKET_SIZE,
+            packet->packet_size
+        );
+        return -1;
+    }
+
+    return 0;
+}
+
+static int validate_packet_checksum(const SystemDataPacketV0 *packet)
+{
+    uint32_t calculated = calculate_checksum32(packet);
+
+    if (calculated != packet->checksum32) {
+        fprintf(
+            stderr,
+            "Invalid checksum: expected=0x%08X, actual=0x%08X\n",
+            calculated,
+            packet->checksum32
+        );
+        return -1;
+    }
+
+    return 0;
+}
+
+static void print_packet_summary(const SystemDataPacketV0 *packet)
+{
+    float accel_x_g = packet->accel_x_raw / 16384.0f;
+    float accel_y_g = packet->accel_y_raw / 16384.0f;
+    float accel_z_g = packet->accel_z_raw / 16384.0f;
+
+    float gyro_x_dps = packet->gyro_x_raw / 131.0f;
+    float gyro_y_dps = packet->gyro_y_raw / 131.0f;
+    float gyro_z_dps = packet->gyro_z_raw / 131.0f;
+
+    printf(
+        "Packet: seq=%u, timestamp=%u ms\n",
+        packet->sequence,
+        packet->timestamp_ms
+    );
+
+    printf(
+        "Accel(g): X=%.2f Y=%.2f Z=%.2f | "
+        "Gyro(dps): X=%.1f Y=%.1f Z=%.1f\n",
+        accel_x_g,
+        accel_y_g,
+        accel_z_g,
+        gyro_x_dps,
+        gyro_y_dps,
+        gyro_z_dps
+    );
+}
 
 static int spi_open_and_configure(
     const char *device,
@@ -157,7 +300,15 @@ int main(void)
         return 1;
     }
 
+    // SPI 讀取循環，嘗試讀取三次有效數據
     uint8_t rx_buf[SPI_RAW_DATA_SIZE] = {0};
+    SystemDataPacketV0 packet = {0};
+    // 用於檢查序列號和時間戳的變量
+    uint32_t previous_sequence = 0U;
+    int has_previous_sequence = 0;
+    // 用於檢查時間戳的變量
+    uint32_t previous_timestamp_ms = 0U;
+    int has_previous_timestamp = 0;
 
     for (int i = 0; i < 3; i++) {
         memset(rx_buf, 0, sizeof(rx_buf));
@@ -173,8 +324,61 @@ int main(void)
             return 1;
         }
 
+        memcpy(&packet, rx_buf, sizeof(packet));
+
+        if (validate_packet_header(&packet) < 0) {
+            usleep(100000);
+            continue;
+        }
+
+        if (validate_packet_checksum(&packet) < 0) {
+            usleep(100000);
+            continue;
+        }
+
+        if (has_previous_sequence != 0) {
+            if (packet.sequence == previous_sequence) {
+                fprintf(
+                    stderr,
+                    "Warning: duplicated sequence=%u\n",
+                    packet.sequence
+                );
+            } else if (packet.sequence < previous_sequence) {
+                fprintf(
+                    stderr,
+                    "Warning: sequence moved backward: previous=%u, current=%u\n",
+                    previous_sequence,
+                    packet.sequence
+                );
+            }
+        }
+
+        previous_sequence = packet.sequence;
+        has_previous_sequence = 1;
+
+        if (has_previous_timestamp != 0) {
+            if (packet.timestamp_ms == previous_timestamp_ms) {
+                fprintf(
+                    stderr,
+                    "Warning: duplicated timestamp=%u ms\n",
+                    packet.timestamp_ms
+                );
+            } else if (packet.timestamp_ms < previous_timestamp_ms) {
+                fprintf(
+                    stderr,
+                    "Warning: timestamp moved backward: previous=%u ms, current=%u ms\n",
+                    previous_timestamp_ms,
+                    packet.timestamp_ms
+                );
+            }
+        }
+
+        previous_timestamp_ms = packet.timestamp_ms;
+        has_previous_timestamp = 1;
+
         printf("Read %d ", i + 1);
         print_bytes("RX", rx_buf, sizeof(rx_buf));
+        print_packet_summary(&packet);
 
         usleep(100000);
     }

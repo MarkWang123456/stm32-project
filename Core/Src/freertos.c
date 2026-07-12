@@ -240,7 +240,7 @@ static void SPI_StartTransfer(void)
     }
     else
     {
-        printf("SPI waiting for 4-byte full-duplex transfer...\r\n");
+        printf("SPI waiting for 60-byte full-duplex transfer...\r\n");
     }
 }
 
