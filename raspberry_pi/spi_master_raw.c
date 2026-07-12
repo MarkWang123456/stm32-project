@@ -11,7 +11,7 @@
 #define SPI_MODE_SETTING    SPI_MODE_0
 #define SPI_BITS_PER_WORD   8U
 #define SPI_SPEED_HZ        10000U
-#define SPI_RAW_DATA_SIZE   4U
+#define SPI_RAW_DATA_SIZE   60U
 
 static int spi_open_and_configure(
     const char *device,

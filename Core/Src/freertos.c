@@ -16,9 +16,11 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <string.h>
 #include "i2c.h"
 #include "spi.h"
 #include "mpu6050_driver.h"
+#include "system_packet.h"  
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,8 +43,11 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-uint8_t spi_rx_buf[4] = {0};
-uint8_t spi_tx_buf[4] = {0xAA, 0xBB, 0xCC, 0xDD};
+uint8_t spi_rx_buf[SYSTEM_PACKET_SIZE] = {0};
+
+static SystemDataPacketV0 packet_working = {0};
+static SystemDataPacketV0 packet_snapshot = {0};
+
 volatile uint8_t spi_txrx_done = 0;
 volatile uint8_t spi_error_seen = 0U;
 volatile uint32_t spi_error_code = HAL_SPI_ERROR_NONE;
@@ -58,6 +63,7 @@ const osThreadAttr_t testTask_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 static void SPI_StartTransfer(void);
+static void SystemPacket_PublishSnapshot(void);
 /* USER CODE END FunctionPrototypes */
 
 void StartTestTask(void *argument);
@@ -132,6 +138,13 @@ void StartTestTask(void *argument)
     */
     osDelay(2000U);
     
+    packet_working.magic = SYSTEM_PACKET_MAGIC;
+    packet_working.version = SYSTEM_PACKET_VERSION;
+    packet_working.header_size = SYSTEM_PACKET_HEADER_SIZE;
+    packet_working.packet_size = SYSTEM_PACKET_SIZE;
+
+    //用SPI發送給樹梅派前 先進行一次快照 避免傳送過程中資料被更新
+    SystemPacket_PublishSnapshot();
     SPI_StartTransfer();
 
     printf("\r\nStartTestTask started.\r\n");
@@ -149,6 +162,17 @@ void StartTestTask(void *argument)
         * so no I2C mutex is required.
         */
         MPU6050_ReadAll(&hi2c1, &accel, &gyro);
+
+        packet_working.sequence++;
+        packet_working.timestamp_ms = HAL_GetTick();
+
+        packet_working.accel_x_raw = accel.raw_x;
+        packet_working.accel_y_raw = accel.raw_y;
+        packet_working.accel_z_raw = accel.raw_z;
+
+        packet_working.gyro_x_raw = gyro.raw_x;
+        packet_working.gyro_y_raw = gyro.raw_y;
+        packet_working.gyro_z_raw = gyro.raw_z;
 
         sampleCount++;
 
@@ -183,6 +207,7 @@ void StartTestTask(void *argument)
               spi_rx_buf[3]
           );
 
+          SystemPacket_PublishSnapshot();
           SPI_StartTransfer();
         }
       if (spi_error_seen != 0U)
@@ -207,9 +232,9 @@ static void SPI_StartTransfer(void)
 {
     if (HAL_SPI_TransmitReceive_IT(
             &hspi1,
-            spi_tx_buf,
+            (uint8_t *)&packet_snapshot,
             spi_rx_buf,
-            4U) != HAL_OK)
+            SYSTEM_PACKET_SIZE) != HAL_OK)
     {
         printf("SPI TxRx start failed.\r\n");
     }
@@ -217,6 +242,17 @@ static void SPI_StartTransfer(void)
     {
         printf("SPI waiting for 4-byte full-duplex transfer...\r\n");
     }
+}
+
+static void SystemPacket_PublishSnapshot(void)
+{
+    memcpy(
+        &packet_snapshot,
+        &packet_working,
+        sizeof(packet_snapshot)
+    );
+
+    packet_snapshot.checksum32 = SystemPacket_CalcChecksum32(&packet_snapshot);
 }
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)

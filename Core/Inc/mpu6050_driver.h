@@ -23,6 +23,9 @@
 
 // 加速度計與陀螺儀數據結構
 typedef struct {
+    int16_t raw_x;
+    int16_t raw_y;
+    int16_t raw_z;
     float x;
     float y;
     float z;

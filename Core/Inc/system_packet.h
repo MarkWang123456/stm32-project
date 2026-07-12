@@ -85,6 +85,10 @@ _Static_assert(offsetof(SystemDataPacketV0, imu_late_count) == 44,
 _Static_assert(offsetof(SystemDataPacketV0, checksum32) == 56,
                "checksum32 offset mismatch");
 
+uint32_t SystemPacket_CalcChecksum32(
+    const SystemDataPacketV0 *pkt
+);
+
 void SystemPacket_GoldenPacketTest(void);
 
 #endif

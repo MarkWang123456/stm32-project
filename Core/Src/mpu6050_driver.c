@@ -72,13 +72,23 @@ void MPU6050_ReadAll(I2C_HandleTypeDef *hi2c, MPU6050_Data *accel, MPU6050_Data 
     // 從 ACCEL_XOUT_H (0x3B) 開始連續讀取 14 Bytes
     HAL_I2C_Mem_Read(hi2c, MPU6050_ADDR, MPU6050_ACCEL_XOUT_H, I2C_MEMADD_SIZE_8BIT, raw, 14, 1000);
     
-    // 加速度計
-    accel->x = (int16_t)(raw[0] << 8 | raw[1]) / 16384.0f;
-    accel->y = (int16_t)(raw[2] << 8 | raw[3]) / 16384.0f;
-    accel->z = (int16_t)(raw[4] << 8 | raw[5]) / 16384.0f;
+    // 加速度計 raw
+    accel->raw_x = (int16_t)((raw[0] << 8) | raw[1]);
+    accel->raw_y = (int16_t)((raw[2] << 8) | raw[3]);
+    accel->raw_z = (int16_t)((raw[4] << 8) | raw[5]);
 
-    // 陀螺儀 (raw[6], raw[7] 為溫度，故跳過)
-    gyro->x = (int16_t)(raw[8] << 8 | raw[9]) / 131.0f;
-    gyro->y = (int16_t)(raw[10] << 8 | raw[11]) / 131.0f;
-    gyro->z = (int16_t)(raw[12] << 8 | raw[13]) / 131.0f;
+    // 加速度計換算值
+    accel->x = accel->raw_x / 16384.0f;
+    accel->y = accel->raw_y / 16384.0f;
+    accel->z = accel->raw_z / 16384.0f;
+
+    // 陀螺儀 raw
+    gyro->raw_x = (int16_t)((raw[8] << 8) | raw[9]);
+    gyro->raw_y = (int16_t)((raw[10] << 8) | raw[11]);
+    gyro->raw_z = (int16_t)((raw[12] << 8) | raw[13]);
+
+    // 陀螺儀換算值
+    gyro->x = gyro->raw_x / 131.0f;
+    gyro->y = gyro->raw_y / 131.0f;
+    gyro->z = gyro->raw_z / 131.0f;
 }

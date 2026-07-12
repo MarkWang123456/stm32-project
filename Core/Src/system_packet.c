@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 
-static uint32_t SystemPacket_CalcChecksum32(const SystemDataPacketV0 *pkt)
+uint32_t SystemPacket_CalcChecksum32(const SystemDataPacketV0 *pkt)
 {
     const uint8_t *bytes = (const uint8_t *)pkt;
     uint32_t sum = 0;
