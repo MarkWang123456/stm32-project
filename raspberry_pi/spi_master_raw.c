@@ -12,7 +12,6 @@
 #define SPI_MODE_SETTING    SPI_MODE_0
 #define SPI_BITS_PER_WORD   8U
 #define SPI_SPEED_HZ        10000U
-#define SPI_RAW_DATA_SIZE   60U
 #define SYSTEM_PACKET_VERSION      0U
 #define SYSTEM_PACKET_HEADER_SIZE  16U
 #define SYSTEM_PACKET_SIZE         60U
@@ -48,6 +47,13 @@ typedef struct __attribute__((packed))
 
     uint32_t checksum32;
 } SystemDataPacketV0;
+
+typedef struct
+{
+    uint32_t previous_sequence;
+    uint32_t previous_timestamp_ms;
+    int has_previous_packet;
+} PacketContinuityState;
 
 _Static_assert(
     sizeof(SystemDataPacketV0) == SYSTEM_PACKET_SIZE,
@@ -156,6 +162,51 @@ static void print_packet_summary(const SystemDataPacketV0 *packet)
     );
 }
 
+static void validate_packet_continuity(
+    const SystemDataPacketV0 *packet,
+    PacketContinuityState *state
+)
+{
+    if (state->has_previous_packet != 0) {
+        if (packet->sequence == state->previous_sequence) {
+            fprintf(
+                stderr,
+                "Warning: duplicated sequence=%u\n",
+                packet->sequence
+            );
+        } else if (packet->sequence < state->previous_sequence) {
+            fprintf(
+                stderr,
+                "Warning: sequence moved backward: "
+                "previous=%u, current=%u\n",
+                state->previous_sequence,
+                packet->sequence
+            );
+        }
+
+        if (packet->timestamp_ms == state->previous_timestamp_ms) {
+            fprintf(
+                stderr,
+                "Warning: duplicated timestamp=%u ms\n",
+                packet->timestamp_ms
+            );
+        } else if (packet->timestamp_ms <
+                   state->previous_timestamp_ms) {
+            fprintf(
+                stderr,
+                "Warning: timestamp moved backward: "
+                "previous=%u ms, current=%u ms\n",
+                state->previous_timestamp_ms,
+                packet->timestamp_ms
+            );
+        }
+    }
+
+    state->previous_sequence = packet->sequence;
+    state->previous_timestamp_ms = packet->timestamp_ms;
+    state->has_previous_packet = 1;
+}
+
 static int spi_open_and_configure(
     const char *device,
     uint8_t mode,
@@ -259,7 +310,7 @@ static int spi_read_raw(
     uint8_t bits_per_word
 )
 {
-    uint8_t tx_dummy[SPI_RAW_DATA_SIZE] = {0};
+    uint8_t tx_dummy[SYSTEM_PACKET_SIZE] = {0};
 
     if (length > sizeof(tx_dummy)) {
         fprintf(
@@ -281,6 +332,50 @@ static int spi_read_raw(
     );
 }
 
+static int spi_read_packet(
+    int fd,
+    SystemDataPacketV0 *packet,
+    uint8_t *raw_buf,
+    size_t raw_buf_size,
+    uint32_t speed_hz,
+    uint8_t bits_per_word
+)
+{
+    if (raw_buf_size < sizeof(*packet)) {
+        fprintf(
+            stderr,
+            "Raw buffer too small: required=%zu, actual=%zu\n",
+            sizeof(*packet),
+            raw_buf_size
+        );
+        return -1;
+    }
+
+    memset(raw_buf, 0, raw_buf_size);
+
+    if (spi_read_raw(
+            fd,
+            raw_buf,
+            sizeof(*packet),
+            speed_hz,
+            bits_per_word
+        ) < 0) {
+        return -1;
+    }
+
+    memcpy(packet, raw_buf, sizeof(*packet));
+
+    if (validate_packet_header(packet) < 0) {
+        return 1;
+    }
+
+    if (validate_packet_checksum(packet) < 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
 int main(void)
 {
     const char *device = SPI_DEVICE;
@@ -300,81 +395,36 @@ int main(void)
         return 1;
     }
 
-    // SPI 讀取循環，嘗試讀取三次有效數據
-    uint8_t rx_buf[SPI_RAW_DATA_SIZE] = {0};
+    // SPI 讀取循環，執行三次 transaction
+    uint8_t rx_buf[SYSTEM_PACKET_SIZE] = {0};
     SystemDataPacketV0 packet = {0};
-    // 用於檢查序列號和時間戳的變量
-    uint32_t previous_sequence = 0U;
-    int has_previous_sequence = 0;
-    // 用於檢查時間戳的變量
-    uint32_t previous_timestamp_ms = 0U;
-    int has_previous_timestamp = 0;
+    // 初始化連續性檢查狀態
+    PacketContinuityState continuity_state = {0};
 
     for (int i = 0; i < 3; i++) {
-        memset(rx_buf, 0, sizeof(rx_buf));
+        int read_result = spi_read_packet(
+            fd,
+            &packet,
+            rx_buf,
+            sizeof(rx_buf),
+            speed_hz,
+            bits_per_word
+        );
 
-        if (spi_read_raw(
-                fd,
-                rx_buf,
-                sizeof(rx_buf),
-                speed_hz,
-                bits_per_word
-            ) < 0) {
+        if (read_result < 0) {
             close(fd);
             return 1;
         }
 
-        memcpy(&packet, rx_buf, sizeof(packet));
-
-        if (validate_packet_header(&packet) < 0) {
+        if (read_result > 0) {
             usleep(100000);
             continue;
         }
 
-        if (validate_packet_checksum(&packet) < 0) {
-            usleep(100000);
-            continue;
-        }
-
-        if (has_previous_sequence != 0) {
-            if (packet.sequence == previous_sequence) {
-                fprintf(
-                    stderr,
-                    "Warning: duplicated sequence=%u\n",
-                    packet.sequence
-                );
-            } else if (packet.sequence < previous_sequence) {
-                fprintf(
-                    stderr,
-                    "Warning: sequence moved backward: previous=%u, current=%u\n",
-                    previous_sequence,
-                    packet.sequence
-                );
-            }
-        }
-
-        previous_sequence = packet.sequence;
-        has_previous_sequence = 1;
-
-        if (has_previous_timestamp != 0) {
-            if (packet.timestamp_ms == previous_timestamp_ms) {
-                fprintf(
-                    stderr,
-                    "Warning: duplicated timestamp=%u ms\n",
-                    packet.timestamp_ms
-                );
-            } else if (packet.timestamp_ms < previous_timestamp_ms) {
-                fprintf(
-                    stderr,
-                    "Warning: timestamp moved backward: previous=%u ms, current=%u ms\n",
-                    previous_timestamp_ms,
-                    packet.timestamp_ms
-                );
-            }
-        }
-
-        previous_timestamp_ms = packet.timestamp_ms;
-        has_previous_timestamp = 1;
+        validate_packet_continuity(
+            &packet,
+            &continuity_state
+        );
 
         printf("Read %d ", i + 1);
         print_bytes("RX", rx_buf, sizeof(rx_buf));
