@@ -183,29 +183,21 @@ void StartTestTask(void *argument)
             /* One-second heartbeat. */
             HAL_GPIO_TogglePin(TEST_LED_PORT, TEST_LED_PIN);
 
-            printf(
-                "Acc(g): X=%.2f Y=%.2f Z=%.2f | "
-                "Gyr(dps): X=%.1f Y=%.1f Z=%.1f\r\n",
-                accel.x,
-                accel.y,
-                accel.z,
-                gyro.x,
-                gyro.y,
-                gyro.z
-            );
+            // printf(
+            //     "Acc(g): X=%.2f Y=%.2f Z=%.2f | "
+            //     "Gyr(dps): X=%.1f Y=%.1f Z=%.1f\r\n",
+            //     accel.x,
+            //     accel.y,
+            //     accel.z,
+            //     gyro.x,
+            //     gyro.y,
+            //     gyro.z
+            // );
         }
 
         if (spi_txrx_done != 0U)
         {
           spi_txrx_done = 0U;
-
-          printf(
-              "SPI RX: %02X %02X %02X %02X\r\n",
-              spi_rx_buf[0],
-              spi_rx_buf[1],
-              spi_rx_buf[2],
-              spi_rx_buf[3]
-          );
 
           SystemPacket_PublishSnapshot();
           SPI_StartTransfer();
@@ -237,10 +229,6 @@ static void SPI_StartTransfer(void)
             SYSTEM_PACKET_SIZE) != HAL_OK)
     {
         printf("SPI TxRx start failed.\r\n");
-    }
-    else
-    {
-        printf("SPI waiting for 60-byte full-duplex transfer...\r\n");
     }
 }
 

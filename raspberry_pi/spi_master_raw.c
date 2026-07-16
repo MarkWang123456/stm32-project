@@ -1,3 +1,6 @@
+// 啟用 POSIX.1-2008 API 宣告，如 clock_gettime() 與 clock_nanosleep()
+#define _POSIX_C_SOURCE 200809L
+
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/spi/spidev.h>
@@ -7,11 +10,14 @@
 #include <stddef.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <time.h>
+#include <signal.h>
 
 #define SPI_DEVICE          "/dev/spidev0.0"
 #define SPI_MODE_SETTING    SPI_MODE_0
 #define SPI_BITS_PER_WORD   8U
-#define SPI_SPEED_HZ        10000U
+#define SPI_SPEED_HZ        10000U  // SPI 傳輸時脈，決定單次 60-byte transaction 的速度
+#define SPI_READ_PERIOD_MS  100U    // 每 100 ms 啟動一次 SPI transaction，讀取頻率為 10 Hz
 #define SYSTEM_PACKET_VERSION      0U
 #define SYSTEM_PACKET_HEADER_SIZE  16U
 #define SYSTEM_PACKET_SIZE         60U
@@ -376,8 +382,65 @@ static int spi_read_packet(
     return 0;
 }
 
+static void timespec_add_ms(
+    struct timespec *time_value,
+    uint32_t milliseconds
+)
+{
+    time_value->tv_sec += milliseconds / 1000U;
+
+    time_value->tv_nsec +=
+        (long)(milliseconds % 1000U) * 1000000L;
+
+    if (time_value->tv_nsec >= 1000000000L) {
+        time_value->tv_sec +=
+            time_value->tv_nsec / 1000000000L;
+
+        time_value->tv_nsec %=
+            1000000000L;
+    }
+}
+
+static int timespec_compare(
+    const struct timespec *left,
+    const struct timespec *right
+)
+{
+    if (left->tv_sec < right->tv_sec) {
+        return -1;
+    }
+
+    if (left->tv_sec > right->tv_sec) {
+        return 1;
+    }
+
+    if (left->tv_nsec < right->tv_nsec) {
+        return -1;
+    }
+
+    if (left->tv_nsec > right->tv_nsec) {
+        return 1;
+    }
+
+    return 0;
+}
+
+static volatile sig_atomic_t stop_requested = 0;
+
+static void handle_sigint(int signal_number)
+{
+    (void)signal_number;
+    stop_requested = 1;
+}
+
 int main(void)
 {
+
+    if (signal(SIGINT, handle_sigint) == SIG_ERR) {
+        perror("signal");
+        return 1;
+    }
+
     const char *device = SPI_DEVICE;
 
     uint8_t mode = SPI_MODE_SETTING;
@@ -395,13 +458,35 @@ int main(void)
         return 1;
     }
 
-    // SPI 讀取循環，執行三次 transaction
     uint8_t rx_buf[SYSTEM_PACKET_SIZE] = {0};
     SystemDataPacketV0 packet = {0};
-    // 初始化連續性檢查狀態
     PacketContinuityState continuity_state = {0};
 
-    for (int i = 0; i < 3; i++) {
+    struct timespec next_deadline = {0};
+
+    if (clock_gettime(
+            CLOCK_MONOTONIC,
+            &next_deadline
+        ) != 0) {
+        perror("clock_gettime");
+        close(fd);
+        return 1;
+    }
+
+    uint64_t read_count = 0U;
+
+    while (stop_requested == 0) {
+        /*
+         * 每輪都從上一個目標時間增加固定週期，
+         * 而不是從本輪工作完成時間重新計算。
+         */
+        timespec_add_ms(
+            &next_deadline,
+            SPI_READ_PERIOD_MS
+        );
+
+        read_count++;
+
         int read_result = spi_read_packet(
             fd,
             &packet,
@@ -416,23 +501,75 @@ int main(void)
             return 1;
         }
 
-        if (read_result > 0) {
-            usleep(100000);
-            continue;
+        if (read_result == 0) {
+            validate_packet_continuity(
+                &packet,
+                &continuity_state
+            );
+
+            printf("Read %llu ",(unsigned long long)read_count);
+            print_bytes(
+                "RX",
+                rx_buf,
+                sizeof(rx_buf)
+            );
+            print_packet_summary(&packet);
         }
 
-        validate_packet_continuity(
-            &packet,
-            &continuity_state
-        );
+        struct timespec current_time = {0};
 
-        printf("Read %d ", i + 1);
-        print_bytes("RX", rx_buf, sizeof(rx_buf));
-        print_packet_summary(&packet);
+        if (clock_gettime(
+                CLOCK_MONOTONIC,
+                &current_time
+            ) != 0) {
+            perror("clock_gettime");
+            close(fd);
+            return 1;
+        }
 
-        usleep(100000);
+        /*
+        * 若本輪工作已超過 deadline，不連續追趕錯過的週期。
+        * 從目前時間重新安排下一次讀取，避免背靠背 SPI transaction。
+        */
+        if (timespec_compare(
+                &current_time,
+                &next_deadline
+            ) >= 0) {
+            next_deadline = current_time;
+
+            timespec_add_ms(
+                &next_deadline,
+                SPI_READ_PERIOD_MS
+            );
+        }
+
+        int sleep_result;
+
+        do {
+            sleep_result = clock_nanosleep(
+                CLOCK_MONOTONIC,
+                TIMER_ABSTIME,
+                &next_deadline,
+                NULL
+            );
+        } while (sleep_result == EINTR);
+
+        if (sleep_result != 0) {
+            fprintf(
+                stderr,
+                "clock_nanosleep failed: %s\n",
+                strerror(sleep_result)
+            );
+
+            close(fd);
+            return 1;
+        }
     }
 
+    printf(
+        "\nStop requested. Total read attempts: %llu\n",
+        (unsigned long long)read_count
+    );
     close(fd);
     return 0;
 }
