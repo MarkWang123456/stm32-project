@@ -78,6 +78,7 @@ static uint32_t calculate_checksum32(const SystemDataPacketV0 *packet)
     return sum;
 }
 
+// 負責 Magic、版本與封包大小檢查
 static int validate_packet_header(const SystemDataPacketV0 *packet)
 {
     if (packet->magic != SYSTEM_PACKET_MAGIC) {
@@ -123,6 +124,7 @@ static int validate_packet_header(const SystemDataPacketV0 *packet)
     return 0;
 }
 
+// 負責 checksum 驗證
 static int validate_packet_checksum(const SystemDataPacketV0 *packet)
 {
     uint32_t calculated = calculate_checksum32(packet);
@@ -168,6 +170,7 @@ static void print_packet_summary(const SystemDataPacketV0 *packet)
     );
 }
 
+// 負責 sequence 與 timestamp 連續性檢查
 static void validate_packet_continuity(
     const SystemDataPacketV0 *packet,
     PacketContinuityState *state
@@ -308,6 +311,7 @@ static int spi_transfer(
     return 0;
 }
 
+// 負責執行 SPI transaction，取得 60 bytes
 static int spi_read_raw(
     int fd,
     uint8_t *rx_buf,
@@ -336,6 +340,37 @@ static int spi_read_raw(
         speed_hz,
         bits_per_word
     );
+}
+
+// 負責將 raw bytes 解析成 SystemDataPacketV0
+static int parse_system_packet_v0(
+    const uint8_t *raw_buf,
+    size_t raw_buf_size,
+    SystemDataPacketV0 *packet
+)
+{
+    if ((raw_buf == NULL) || (packet == NULL)) {
+        fprintf(stderr, "Packet parse argument is NULL\n");
+        return -1;
+    }
+
+    if (raw_buf_size < sizeof(*packet)) {
+        fprintf(
+            stderr,
+            "Packet parse buffer too small: required=%zu, actual=%zu\n",
+            sizeof(*packet),
+            raw_buf_size
+        );
+        return -1;
+    }
+
+    memcpy(
+        packet,
+        raw_buf,
+        sizeof(*packet)
+    );
+
+    return 0;
 }
 
 static int spi_read_packet(
@@ -369,7 +404,13 @@ static int spi_read_packet(
         return -1;
     }
 
-    memcpy(packet, raw_buf, sizeof(*packet));
+    if (parse_system_packet_v0(
+            raw_buf,
+            raw_buf_size,
+            packet
+        ) < 0) {
+        return -1;
+    }
 
     if (validate_packet_header(packet) < 0) {
         return 1;
