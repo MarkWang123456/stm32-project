@@ -278,7 +278,7 @@ static void format_event_line(
     size_t index)
 {
     struct tm local_time;
-    char time_buffer[6];
+    char time_buffer[9];  /* "HH:MM:SS\0" */
 
     if ((buffer == NULL) || (buffer_size == 0U))
     {
@@ -302,14 +302,14 @@ static void format_event_line(
         (void)snprintf(
             time_buffer,
             sizeof(time_buffer),
-            "--:--");
+            "--:--:--");
     }
     else
     {
         (void)strftime(
             time_buffer,
             sizeof(time_buffer),
-            "%H:%M",
+            "%H:%M:%S",
             &local_time);
     }
 
