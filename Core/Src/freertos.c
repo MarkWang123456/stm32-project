@@ -33,7 +33,11 @@
 #define TEST_LED_PIN        GPIO_PIN_13
 
 #define PI_COMMAND_NONE          0x00U  //Raspberry Pi 傳給 STM32 的簡單命令。
-#define PI_COMMAND_TOGGLE_LED    0x01U  //0x00 代表沒有命令，0x01 代表切換 LED。
+#define PI_COMMAND_LED_PULSE     0x02U  //0x02U是 Raspberry Pi 傳給 STM32 的簡單命令，代表要讓 STM32 的 LED 亮起一段時間。
+
+#define TEST_LED_PULSE_MS        200U   // LED 亮起的時間長度，單位為毫秒
+#define TEST_LED_ON_STATE        GPIO_PIN_RESET  // Low  → LED 亮
+#define TEST_LED_OFF_STATE       GPIO_PIN_SET    // High → LED 熄滅
 
 #define MPU_SAMPLE_PERIOD_MS    10U   // 每 10 ms(100 Hz) 讀一次 MPU6050
 #define MPU_LOG_EVERY_SAMPLES   100U  // 每讀 100 筆資料(1 Hz) 才印一次 Log
@@ -134,6 +138,9 @@ void StartTestTask(void *argument)
 
     //採樣次數計數器
     uint32_t sampleCount = 0U;
+    //LED 計時狀態
+    uint8_t led_pulse_active = 0U;
+    uint32_t led_off_tick = 0U;
 
     //把 MPU6050 的 10 ms 採樣週期換算成 FreeRTOS 的 Tick
     const TickType_t samplePeriod =
@@ -200,12 +207,19 @@ void StartTestTask(void *argument)
           */
           spi_rx_buf[0] = PI_COMMAND_NONE;
 
-          if (pi_command == PI_COMMAND_TOGGLE_LED)
+          if (pi_command == PI_COMMAND_LED_PULSE)
           {
-            /*
-            * LED 狀態切換代表 STM32 已收到並處理 Pi 傳來的命令。
-            */             
-            HAL_GPIO_TogglePin(TEST_LED_PORT, TEST_LED_PIN);
+              /*
+              * 立即點亮 LED，並記錄預定熄滅時間。
+              */
+              HAL_GPIO_WritePin(
+                  TEST_LED_PORT,
+                  TEST_LED_PIN,
+                  TEST_LED_ON_STATE
+              );
+
+              led_pulse_active = 1U;
+              led_off_tick = HAL_GetTick() + TEST_LED_PULSE_MS;
           }
 
           /*
@@ -221,6 +235,25 @@ void StartTestTask(void *argument)
               spi_txrx_done = 1U;
           }
       }
+
+
+      /*
+      * LED 亮滿指定時間後自動熄滅。
+      *
+      * 使用相減方式判斷，可正確處理 HAL_GetTick()
+      */
+      if ((led_pulse_active != 0U) &&
+          ((int32_t)(HAL_GetTick() - led_off_tick) >= 0))
+      {
+          HAL_GPIO_WritePin(
+              TEST_LED_PORT,
+              TEST_LED_PIN,
+              TEST_LED_OFF_STATE
+          );
+
+          led_pulse_active = 0U;
+      }
+
       //透過 I2C1 讀取 MPU6050
       HAL_StatusTypeDef imu_status =MPU6050_ReadAll(&hi2c1, &accel, &gyro);
 

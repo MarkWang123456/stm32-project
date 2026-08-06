@@ -24,7 +24,7 @@
 #define VIBRATION_THRESHOLD_G  0.10f            // 加速度總量偏離靜止狀態 1 g 超過 0.1 g，就先認定有明顯震動
 
 #define PI_COMMAND_NONE          0x00U          // Raspberry Pi 傳給 STM32 的簡單命令。
-#define PI_COMMAND_TOGGLE_LED    0x01U          // 0x00 代表沒有命令，0x01 代表切換 LED。
+#define PI_COMMAND_LED_PULSE     0x02U          // 0x00 代表沒有命令，0x01 代表切換 LED。
 
 //監測封包連續性狀態
 typedef struct
@@ -39,6 +39,12 @@ _Static_assert(
     sizeof(SystemDataPacketV0) == SYSTEM_PACKET_SIZE,
     "SystemDataPacketV0 size must be 60 bytes"
 );
+
+/*
+ * 等待在下一次 SPI transaction 傳給 STM32 的命令。
+ * 程式目前是單執行緒，因此不需要 mutex。
+ */
+static uint8_t pending_pi_command = PI_COMMAND_NONE;
 
 /**
   * @brief  把前 16 bytes 標頭印出來
@@ -173,6 +179,12 @@ static void process_vibration(
             "================================\n\n",
             magnitude
         );
+
+        /*
+        * 下一次 SPI transaction 通知 STM32：
+        * 讓 LED 亮一下。
+        */
+        pending_pi_command = PI_COMMAND_LED_PULSE;
 
         if (oled_ready != 0) {
             oled_display_event_start(
@@ -394,11 +406,6 @@ static int spi_read_packet(
     uint8_t bits_per_word
 )
 {
-    /*
-     * 確保每次程式執行只送一次 LED 命令。
-     */
-    static int led_command_sent = 0;
-
     if (raw_buf_size < sizeof(*packet)) {
         fprintf(
             stderr,
@@ -414,14 +421,9 @@ static int spi_read_packet(
 
     uint8_t tx_buf[SYSTEM_PACKET_SIZE] = {0};
 
-    /*
-    * 程式啟動後的第一次 SPI 傳輸，
-    * 在第一個 byte 放入 LED 切換命令。
-    */
-    if (led_command_sent == 0)
-    {
-        tx_buf[0] = PI_COMMAND_TOGGLE_LED;
-    }
+    uint8_t command_to_send = pending_pi_command;
+
+    tx_buf[0] = command_to_send;
 
     /*
     * SPI 全雙工傳輸：
@@ -440,16 +442,15 @@ static int spi_read_packet(
     }
 
     /*
-    * 傳輸成功後才記錄命令已送出。
-    * 後續 tx_buf 會維持全部為 0x00。
+    * 只有 SPI 傳輸成功後才清除命令。
     */
-    if (led_command_sent == 0)
+    if (command_to_send != PI_COMMAND_NONE)
     {
-        led_command_sent = 1;
+        pending_pi_command = PI_COMMAND_NONE;
 
         printf(
-            "Sent command to STM32: TOGGLE_LED (0x%02X)\n",
-            PI_COMMAND_TOGGLE_LED
+            "Sent command to STM32: LED_PULSE (0x%02X)\n",
+            command_to_send
         );
     }
 
@@ -461,9 +462,35 @@ static int spi_read_packet(
         return -1;
     }
 
-    if (SystemPacket_Validate(packet) < 0) {
-        return 1;
-    }
+if (SystemPacket_Validate(packet) < 0)
+{
+    static uint32_t invalid_count = 0U;
+    invalid_count++;
+
+    fprintf(
+        stderr,
+        "Invalid packet #%u\n",
+        invalid_count
+    );
+
+    fprintf(
+        stderr,
+        "magic=0x%08X version=%u header=%u size=%u "
+        "seq=%u timestamp=%u checksum=0x%08X\n",
+        packet->magic,
+        packet->version,
+        packet->header_size,
+        packet->packet_size,
+        packet->sequence,
+        packet->timestamp_ms,
+        packet->checksum32
+    );
+
+    printf("Raw first 16 bytes: ");
+    dump_bytes(raw_buf, 16U);
+
+    return 1;
+}
 
     return 0;
 }
