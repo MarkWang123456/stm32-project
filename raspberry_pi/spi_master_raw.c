@@ -20,10 +20,6 @@
 #define SPI_BITS_PER_WORD   8U                  // 每個 SPI 傳輸單位的位元數
 #define SPI_SPEED_HZ        10000U              // SPI 傳輸時脈，決定單次 60-byte transaction 的速度
 #define SPI_READ_PERIOD_MS  100U                // 每 100 ms 啟動一次 SPI transaction，讀取頻率為 10 Hz
-#define SYSTEM_PACKET_VERSION      0U           // 系統封包版本號
-#define SYSTEM_PACKET_HEADER_SIZE  16U          // 系統封包標頭大小
-#define SYSTEM_PACKET_SIZE         60U          // 系統封包總大小
-#define SYSTEM_PACKET_MAGIC        0x30504453U  // 系統封包 Magic Number，Little-endian memory order: 'S' = 0x53, 'D' = 0x44, 'P' = 0x50, '0' = 0x30
 #define VIBRATION_THRESHOLD_G  0.10f            // 加速度總量偏離靜止狀態 1 g 超過 0.1 g，就先認定有明顯震動
 
 //監測封包連續性狀態
