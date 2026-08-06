@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <math.h>
 #include "system_packet.h"  
+#include "oled_display.h"
 
 #define SPI_DEVICE          "/dev/spidev0.0"    // SPI Bus 0，CE0 (Chip Select 0)
 #define SPI_MODE_SETTING    SPI_MODE_0          // SPI Mode 0: CPOL=0, CPHA=0
@@ -126,6 +127,9 @@ static int detect_vibration(
     return deviation >= VIBRATION_THRESHOLD_G;
 }
 
+// OLED 初始化成功後設為 1；更新失敗時設回 0。
+static int oled_ready = 0;
+
 /**
   * @brief  負責偵測震動事件，並在狀態改變時顯示訊息
   */
@@ -147,10 +151,9 @@ static void process_vibration(
     );
 
     printf(
-        "Magnitude=%.3f g | deviation=%.3f g | status=%s\n",
+        "Magnitude=%.3f g | deviation=%.3f g\n",
         magnitude,
-        deviation,
-        vibration ? "VIBRATION" : "NORMAL"
+        deviation
     );
 
     /*
@@ -163,12 +166,25 @@ static void process_vibration(
             "\n"
             "================================\n"
             "  VIBRATION DETECTED\n"
-            "  Sequence : %u\n"
             "  Magnitude: %.3f g\n"
             "================================\n\n",
-            packet->sequence,
             magnitude
         );
+
+        if (oled_ready != 0) {
+            oled_display_event_start(
+                magnitude,
+                time(NULL)
+            );
+        }
+    }
+
+    /*
+     * 同一次震動持續期間，只更新這筆事件的峰值。
+     */
+    if ((vibration != 0) &&
+        (oled_ready != 0)) {
+        oled_display_event_update_peak(magnitude);
     }
 
     /*
@@ -177,6 +193,16 @@ static void process_vibration(
     if ((vibration == 0) &&
         (previous_vibration != 0)) {
         printf("[STATE] Returned to NORMAL\n");
+    }
+
+    /*
+     * SPI 每 100 ms 讀一次，因此 OLED 也最多每 100 ms 更新一次。
+     */
+    if ((oled_ready != 0) &&
+        (oled_display_update(vibration != 0, magnitude) != 0)) {
+        fprintf(stderr, "OLED update disabled after I2C error\n");
+        oled_display_close();
+        oled_ready = 0;
     }
 
     previous_vibration = vibration;
@@ -470,12 +496,43 @@ static void handle_sigint(int signal_number)
     stop_requested = 1;
 }
 
+/**
+  * @brief 關閉 SPI 與 OLED 資源
+  */
+static void cleanup_resources(int spi_fd)
+{
+    if (spi_fd >= 0) {
+        close(spi_fd);
+    }
+
+    if (oled_ready != 0) {
+        oled_display_close();
+        oled_ready = 0;
+    }
+}
+
 int main(void)
 {
     //收到 SIGINT，不要用預設方式，改成先呼叫 handle_sigint()
     if (signal(SIGINT, handle_sigint) == SIG_ERR) {
         perror("signal");
         return 1;
+    }
+
+    //OLED 故障時，SPI 監測仍然可以繼續執行
+    if (oled_display_init() != 0) {
+        fprintf(
+            stderr,
+            "OLED initialization failed; SPI monitoring will continue\n"
+        );
+    } else {
+        oled_ready = 1;
+
+        if (oled_display_update(false, 0.0f) != 0) {
+            fprintf(stderr, "OLED initial screen update failed\n");
+            oled_display_close();
+            oled_ready = 0;
+        }
     }
 
     const char *device = SPI_DEVICE;
@@ -492,6 +549,7 @@ int main(void)
     );
 
     if (fd < 0) {
+        cleanup_resources(-1);
         return 1;
     }
 
@@ -507,7 +565,7 @@ int main(void)
             &next_deadline
         ) != 0) {
         perror("clock_gettime");
-        close(fd);
+        cleanup_resources(fd);
         return 1;
     }
 
@@ -536,7 +594,7 @@ int main(void)
         );
 
         if (read_result < 0) {
-            close(fd);
+            cleanup_resources(fd);
             return 1;
         }
 
@@ -559,7 +617,7 @@ int main(void)
                 &current_time
             ) != 0) {
             perror("clock_gettime");
-            close(fd);
+            cleanup_resources(fd);
             return 1;
         }
 
@@ -599,7 +657,7 @@ int main(void)
                 strerror(sleep_result)
             );
 
-            close(fd);
+            cleanup_resources(fd);
             return 1;
         }
     }
@@ -608,6 +666,8 @@ int main(void)
         "\nStop requested. Total read attempts: %llu\n",
         (unsigned long long)read_count
     );
-    close(fd);
+    
+    cleanup_resources(fd);
+
     return 0;
 }

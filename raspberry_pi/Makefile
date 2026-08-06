@@ -1,20 +1,20 @@
-# Raspberry Pi SPI master build
+# Raspberry Pi SPI master with SSD1306 OLED support
 
 CC := gcc
 TARGET := spi_master_raw
 BUILD_DIR := build
 
-# This Makefile is intended to be placed in:
-#   stm32-project/raspberry_pi/
 COMMON_INC := ../Core/Inc
 COMMON_SRC := ../Core/Src/system_packet.c
 
-SOURCES := spi_master_raw.c $(COMMON_SRC)
-OBJECTS := $(BUILD_DIR)/spi_master_raw.o \
-           $(BUILD_DIR)/system_packet.o
+OBJECTS := \
+	$(BUILD_DIR)/spi_master_raw.o \
+	$(BUILD_DIR)/system_packet.o \
+	$(BUILD_DIR)/oled_display.o
+
 DEPS := $(OBJECTS:.o=.d)
 
-CPPFLAGS := -I$(COMMON_INC)
+CPPFLAGS := -I$(COMMON_INC) -I.
 CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O2 -MMD -MP
 LDLIBS := -lm
 
@@ -25,10 +25,13 @@ all: $(TARGET)
 $(TARGET): $(OBJECTS)
 	$(CC) $(OBJECTS) -o $@ $(LDLIBS)
 
-$(BUILD_DIR)/spi_master_raw.o: spi_master_raw.c | $(BUILD_DIR)
+$(BUILD_DIR)/spi_master_raw.o: spi_master_raw.c oled_display.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/system_packet.o: $(COMMON_SRC) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/oled_display.o: oled_display.c oled_display.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR):
