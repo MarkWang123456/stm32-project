@@ -21,10 +21,11 @@
 #define SPI_BITS_PER_WORD   8U                  // 每個 SPI 傳輸單位的位元數
 #define SPI_SPEED_HZ        10000U              // SPI 傳輸時脈，決定單次 60-byte transaction 的速度
 #define SPI_READ_PERIOD_MS  100U                // 每 100 ms 啟動一次 SPI transaction，讀取頻率為 10 Hz
-#define VIBRATION_THRESHOLD_G  0.10f            // 加速度總量偏離靜止狀態 1 g 超過 0.1 g，就先認定有明顯震動
+#define VIBRATION_ON_THRESHOLD_G   0.20f            // 加速度總量偏離靜止狀態 1 g 超過 0.2 g，就先認定有明顯震動
+#define VIBRATION_OFF_THRESHOLD_G  0.10f        // 加速度總量偏離靜止狀態 1 g 小於 0.1 g，就先認定震動已經結束
 
 #define PI_COMMAND_NONE          0x00U          // Raspberry Pi 傳給 STM32 的簡單命令。
-#define PI_COMMAND_LED_PULSE     0x02U          // 0x00 代表沒有命令，0x01 代表切換 LED。
+#define PI_COMMAND_LED_PULSE     0x02U          // 0x00 代表沒有命令，0x02 代表通知 STM32 讓 LED 短暫亮一次。
 
 //監測封包連續性狀態
 typedef struct
@@ -133,27 +134,36 @@ static int detect_vibration(
     *magnitude_out = magnitude;
     *deviation_out = deviation;
 
-    return deviation >= VIBRATION_THRESHOLD_G;
+    return deviation >= VIBRATION_ON_THRESHOLD_G;
 }
 
 // OLED 初始化成功後設為 1；更新失敗時設回 0。
 static int oled_ready = 0;
 
 /**
-  * @brief  負責偵測震動事件，並在狀態改變時顯示訊息
+  * @brief 計算震動強度，使用遲滯門檻管理震動狀態，
+  *        並在狀態改變時更新終端機、OLED 與 LED 命令。
   */
 static void process_vibration(
     const SystemDataPacketV0 *packet
 )
 {
-    static int previous_vibration = 0;
+    /*
+     * 保存目前震動狀態：
+     * 0 表示 NORMAL，1 表示 VIBRATION。
+     */
+    static int vibration_active = 0;
 
     //加速度向量大小
     float magnitude = 0.0f;
     //偏離量
     float deviation = 0.0f;
 
-    int vibration = detect_vibration(
+    /*
+     * detect_vibration() 同時計算 magnitude 與 deviation。
+     * 回傳非零代表 deviation 已達到震動觸發門檻。
+     */
+    int above_trigger_threshold = detect_vibration(
         packet,
         &magnitude,
         &deviation
@@ -166,24 +176,29 @@ static void process_vibration(
     );
 
     /*
-     * 只有從 NORMAL 變成 VIBRATION 時，
-     * 顯示一次事件訊息。
+     * NORMAL -> VIBRATION：
+     * 單筆偏差達到觸發門檻時，開始一次新的震動事件。
      */
-    if ((vibration != 0) &&
-        (previous_vibration == 0)) {
+    if ((vibration_active == 0) &&
+        (above_trigger_threshold != 0)) {
+        vibration_active = 1;
+
         printf(
             "\n"
             "================================\n"
+            "  [STATE] NORMAL -> VIBRATION\n"
             "  VIBRATION DETECTED\n"
             "  Magnitude: %.3f g\n"
+            "  Deviation: %.3f g\n"
             "================================\n\n",
-            magnitude
+            magnitude,
+            deviation
         );
 
         /*
-        * 下一次 SPI transaction 通知 STM32：
-        * 讓 LED 亮一下。
-        */
+         * 將 LED_PULSE 放入待傳送命令。
+         * 下一次 SPI transaction 成功時才真正送給 STM32。
+         */
         pending_pi_command = PI_COMMAND_LED_PULSE;
 
         if (oled_ready != 0) {
@@ -195,33 +210,45 @@ static void process_vibration(
     }
 
     /*
-     * 同一次震動持續期間，只更新這筆事件的峰值。
+     * VIBRATION -> NORMAL：
+     * 偏差降到恢復門檻以下時，結束本次震動事件。
      */
-    if ((vibration != 0) &&
+    else if ((vibration_active != 0) &&
+             (deviation <= VIBRATION_OFF_THRESHOLD_G)) {
+        vibration_active = 0;
+
+        printf(
+            "\n"
+            "[STATE] VIBRATION -> NORMAL\n\n"
+        );
+    }
+
+    /*
+     * 震動持續期間更新本次事件的最大 magnitude。
+     */
+    if ((vibration_active != 0) &&
         (oled_ready != 0)) {
         oled_display_event_update_peak(magnitude);
     }
 
     /*
-     * 從震動恢復正常時也顯示一次。
-     */
-    if ((vibration == 0) &&
-        (previous_vibration != 0)) {
-        printf("[STATE] Returned to NORMAL\n");
-    }
-
-    /*
-     * SPI 每 100 ms 讀一次，因此 OLED 也最多每 100 ms 更新一次。
+     * OLED 使用遲滯狀態 vibration_active，
+     * 避免顯示狀態在門檻附近反覆切換。
      */
     if ((oled_ready != 0) &&
-        (oled_display_update(vibration != 0, magnitude) != 0)) {
-        fprintf(stderr, "OLED update disabled after I2C error\n");
+        (oled_display_update(
+            vibration_active != 0,
+            magnitude
+        ) != 0)) {
+        fprintf(
+            stderr,
+            "OLED update disabled after I2C error\n"
+        );
+
         oled_display_close();
         oled_ready = 0;
     }
-
-    previous_vibration = vibration;
-}
+}    
 
 /**
   * @brief  負責 sequence 與 timestamp 連續性檢查
