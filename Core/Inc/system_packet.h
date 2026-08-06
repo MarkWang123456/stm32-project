@@ -8,6 +8,13 @@
 #define SYSTEM_PACKET_HEADER_SIZE  16u
 #define SYSTEM_PACKET_SIZE         60u
 
+#define SENSOR_STATUS_IMU_VALID  (1U << 0)
+#define SENSOR_STATUS_BME_VALID  (1U << 1)
+
+#define SYSTEM_FLAG_I2C_ERROR    (1U << 0)
+#define SYSTEM_FLAG_SPI_ERROR    (1U << 1)
+#define SYSTEM_FLAG_IMU_LATE     (1U << 2)
+
 /*
  * Magic: "SDP0"
  * Little-endian memory order:
@@ -90,6 +97,18 @@ uint32_t SystemPacket_CalcChecksum32(
 );
 
 void SystemPacket_GoldenPacketTest(void);
+
+int SystemPacket_ValidateHeader(
+    const SystemDataPacketV0 *pkt
+);
+
+int SystemPacket_ValidateChecksum(
+    const SystemDataPacketV0 *pkt
+);
+
+int SystemPacket_Validate(
+    const SystemDataPacketV0 *pkt
+);
 
 #endif
 

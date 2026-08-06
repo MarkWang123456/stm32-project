@@ -32,7 +32,7 @@ typedef struct {
 } MPU6050_Data;
 
 // 函式宣告
-uint8_t MPU6050_Init(I2C_HandleTypeDef *hi2c);
-void MPU6050_ReadAll(I2C_HandleTypeDef *hi2c, MPU6050_Data *accel, MPU6050_Data *gyro);
+HAL_StatusTypeDef MPU6050_Init(I2C_HandleTypeDef *hi2c);
+HAL_StatusTypeDef MPU6050_ReadAll(I2C_HandleTypeDef *hi2c, MPU6050_Data *accel, MPU6050_Data *gyro);
 
 #endif

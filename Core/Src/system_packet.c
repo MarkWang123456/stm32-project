@@ -94,3 +94,63 @@ void SystemPacket_GoldenPacketTest(void)
     printf("Hex dump:\r\n");
     SystemPacket_PrintHexDump((const uint8_t *)&pkt, sizeof(pkt));
 }
+
+int SystemPacket_ValidateHeader(
+    const SystemDataPacketV0 *pkt
+)
+{
+    if (pkt == NULL) {
+        return -1;
+    }
+
+    if (pkt->magic != SYSTEM_PACKET_MAGIC) {
+        return -1;
+    }
+
+    if (pkt->version != SYSTEM_PACKET_VERSION) {
+        return -1;
+    }
+
+    if (pkt->header_size != SYSTEM_PACKET_HEADER_SIZE) {
+        return -1;
+    }
+
+    if (pkt->packet_size != SYSTEM_PACKET_SIZE) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int SystemPacket_ValidateChecksum(
+    const SystemDataPacketV0 *pkt
+)
+{
+    if (pkt == NULL) {
+        return -1;
+    }
+
+    uint32_t calculated_checksum =
+        SystemPacket_CalcChecksum32(pkt);
+
+    if (pkt->checksum32 != calculated_checksum) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int SystemPacket_Validate(
+    const SystemDataPacketV0 *pkt
+)
+{
+    if (SystemPacket_ValidateHeader(pkt) < 0) {
+        return -1;
+    }
+
+    if (SystemPacket_ValidateChecksum(pkt) < 0) {
+        return -1;
+    }
+
+    return 0;
+}

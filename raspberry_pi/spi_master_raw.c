@@ -1,8 +1,8 @@
 // 啟用 POSIX.1-2008 API 宣告，如 clock_gettime() 與 clock_nanosleep()
 #define _POSIX_C_SOURCE 200809L
 
-#include <errno.h>
-#include <fcntl.h>
+#include <errno.h>                
+#include <fcntl.h>               
 #include <linux/spi/spidev.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -12,48 +12,21 @@
 #include <unistd.h>
 #include <time.h>
 #include <signal.h>
+#include <math.h>
+#include "system_packet.h"  
 
-#define SPI_DEVICE          "/dev/spidev0.0"
-#define SPI_MODE_SETTING    SPI_MODE_0
-#define SPI_BITS_PER_WORD   8U
-#define SPI_SPEED_HZ        10000U  // SPI 傳輸時脈，決定單次 60-byte transaction 的速度
-#define SPI_READ_PERIOD_MS  100U    // 每 100 ms 啟動一次 SPI transaction，讀取頻率為 10 Hz
-#define SYSTEM_PACKET_VERSION      0U
-#define SYSTEM_PACKET_HEADER_SIZE  16U
-#define SYSTEM_PACKET_SIZE         60U
-#define SYSTEM_PACKET_MAGIC        0x30504453U
+#define SPI_DEVICE          "/dev/spidev0.0"    // SPI Bus 0，CE0 (Chip Select 0)
+#define SPI_MODE_SETTING    SPI_MODE_0          // SPI Mode 0: CPOL=0, CPHA=0
+#define SPI_BITS_PER_WORD   8U                  // 每個 SPI 傳輸單位的位元數
+#define SPI_SPEED_HZ        10000U              // SPI 傳輸時脈，決定單次 60-byte transaction 的速度
+#define SPI_READ_PERIOD_MS  100U                // 每 100 ms 啟動一次 SPI transaction，讀取頻率為 10 Hz
+#define SYSTEM_PACKET_VERSION      0U           // 系統封包版本號
+#define SYSTEM_PACKET_HEADER_SIZE  16U          // 系統封包標頭大小
+#define SYSTEM_PACKET_SIZE         60U          // 系統封包總大小
+#define SYSTEM_PACKET_MAGIC        0x30504453U  // 系統封包 Magic Number，Little-endian memory order: 'S' = 0x53, 'D' = 0x44, 'P' = 0x50, '0' = 0x30
+#define VIBRATION_THRESHOLD_G  0.10f            // 加速度總量偏離靜止狀態 1 g 超過 0.1 g，就先認定有明顯震動
 
-typedef struct __attribute__((packed))
-{
-    uint32_t magic;
-    uint8_t  version;
-    uint8_t  header_size;
-    uint16_t packet_size;
-
-    uint32_t sequence;
-    uint32_t timestamp_ms;
-
-    int16_t accel_x_raw;
-    int16_t accel_y_raw;
-    int16_t accel_z_raw;
-    int16_t gyro_x_raw;
-    int16_t gyro_y_raw;
-    int16_t gyro_z_raw;
-
-    int32_t  temperature_c_x100;
-    uint32_t pressure_pa;
-    uint32_t humidity_percent_x100;
-
-    uint16_t sensor_status;
-    uint16_t system_flags;
-
-    uint32_t imu_late_count;
-    uint32_t i2c_error_count;
-    uint32_t i2c_recovery_count;
-
-    uint32_t checksum32;
-} SystemDataPacketV0;
-
+//監測封包連續性狀態
 typedef struct
 {
     uint32_t previous_sequence;
@@ -61,87 +34,30 @@ typedef struct
     int has_previous_packet;
 } PacketContinuityState;
 
+// 確保 SystemDataPacketV0 結構大小符合預期
 _Static_assert(
     sizeof(SystemDataPacketV0) == SYSTEM_PACKET_SIZE,
     "SystemDataPacketV0 size must be 60 bytes"
 );
 
-static uint32_t calculate_checksum32(const SystemDataPacketV0 *packet)
+/**
+  * @brief  把前 16 bytes 標頭印出來
+  */
+static void dump_bytes(
+    const uint8_t *data,
+    size_t length
+)
 {
-    const uint8_t *bytes = (const uint8_t *)packet;
-    uint32_t sum = 0U;
-
-    for (size_t i = 0; i < offsetof(SystemDataPacketV0, checksum32); i++) {
-        sum += bytes[i];
+    for (size_t i = 0; i < length; i++) {
+        printf("%02X ", data[i]);
     }
 
-    return sum;
+    printf("\n");
 }
 
-// 負責 Magic、版本與封包大小檢查
-static int validate_packet_header(const SystemDataPacketV0 *packet)
-{
-    if (packet->magic != SYSTEM_PACKET_MAGIC) {
-        fprintf(
-            stderr,
-            "Invalid packet magic: expected=0x%08X, actual=0x%08X\n",
-            SYSTEM_PACKET_MAGIC,
-            packet->magic
-        );
-        return -1;
-    }
-
-    if (packet->version != SYSTEM_PACKET_VERSION) {
-        fprintf(
-            stderr,
-            "Invalid packet version: expected=%u, actual=%u\n",
-            SYSTEM_PACKET_VERSION,
-            packet->version
-        );
-        return -1;
-    }
-
-    if (packet->header_size != SYSTEM_PACKET_HEADER_SIZE) {
-        fprintf(
-            stderr,
-            "Invalid header size: expected=%u, actual=%u\n",
-            SYSTEM_PACKET_HEADER_SIZE,
-            packet->header_size
-        );
-        return -1;
-    }
-
-    if (packet->packet_size != SYSTEM_PACKET_SIZE) {
-        fprintf(
-            stderr,
-            "Invalid packet size: expected=%u, actual=%u\n",
-            SYSTEM_PACKET_SIZE,
-            packet->packet_size
-        );
-        return -1;
-    }
-
-    return 0;
-}
-
-// 負責 checksum 驗證
-static int validate_packet_checksum(const SystemDataPacketV0 *packet)
-{
-    uint32_t calculated = calculate_checksum32(packet);
-
-    if (calculated != packet->checksum32) {
-        fprintf(
-            stderr,
-            "Invalid checksum: expected=0x%08X, actual=0x%08X\n",
-            calculated,
-            packet->checksum32
-        );
-        return -1;
-    }
-
-    return 0;
-}
-
+/**
+  * @brief  印出封包數值
+  */
 static void print_packet_summary(const SystemDataPacketV0 *packet)
 {
     float accel_x_g = packet->accel_x_raw / 16384.0f;
@@ -170,7 +86,109 @@ static void print_packet_summary(const SystemDataPacketV0 *packet)
     );
 }
 
-// 負責 sequence 與 timestamp 連續性檢查
+/**
+  * @brief  負責偵測是否有明顯震動
+  */
+static int detect_vibration(
+    const SystemDataPacketV0 *packet,
+    float *magnitude_out,
+    float *deviation_out
+)
+{
+    if ((packet == NULL) ||
+        (magnitude_out == NULL) ||
+        (deviation_out == NULL)) {
+        return 0;
+    }
+
+    float accel_x_g =
+        packet->accel_x_raw / 16384.0f;
+
+    float accel_y_g =
+        packet->accel_y_raw / 16384.0f;
+
+    float accel_z_g =
+        packet->accel_z_raw / 16384.0f;
+
+    //平方合開根號
+    float magnitude = sqrtf(
+        accel_x_g * accel_x_g +
+        accel_y_g * accel_y_g +
+        accel_z_g * accel_z_g
+    );
+
+    /*
+     * 靜止時 magnitude 約為 1 g。
+     * 計算目前數值偏離 1 g 多少。
+     * 使用浮點數絕對值
+     */
+    float deviation = fabsf(magnitude - 1.0f);
+
+    *magnitude_out = magnitude;
+    *deviation_out = deviation;
+
+    return deviation >= VIBRATION_THRESHOLD_G;
+}
+
+/**
+  * @brief  負責偵測震動事件，並在狀態改變時顯示訊息
+  */
+static void process_vibration(
+    const SystemDataPacketV0 *packet
+)
+{
+    static int previous_vibration = 0;
+
+    //加速度向量大小
+    float magnitude = 0.0f;
+    //偏離量
+    float deviation = 0.0f;
+
+    int vibration = detect_vibration(
+        packet,
+        &magnitude,
+        &deviation
+    );
+
+    printf(
+        "Magnitude=%.3f g | deviation=%.3f g | status=%s\n",
+        magnitude,
+        deviation,
+        vibration ? "VIBRATION" : "NORMAL"
+    );
+
+    /*
+     * 只有從 NORMAL 變成 VIBRATION 時，
+     * 顯示一次事件訊息。
+     */
+    if ((vibration != 0) &&
+        (previous_vibration == 0)) {
+        printf(
+            "\n"
+            "================================\n"
+            "  VIBRATION DETECTED\n"
+            "  Sequence : %u\n"
+            "  Magnitude: %.3f g\n"
+            "================================\n\n",
+            packet->sequence,
+            magnitude
+        );
+    }
+
+    /*
+     * 從震動恢復正常時也顯示一次。
+     */
+    if ((vibration == 0) &&
+        (previous_vibration != 0)) {
+        printf("[STATE] Returned to NORMAL\n");
+    }
+
+    previous_vibration = vibration;
+}
+
+/**
+  * @brief  負責 sequence 與 timestamp 連續性檢查
+  */
 static void validate_packet_continuity(
     const SystemDataPacketV0 *packet,
     PacketContinuityState *state
@@ -216,6 +234,9 @@ static void validate_packet_continuity(
     state->has_previous_packet = 1;
 }
 
+/**
+  * @brief  開啟 SPI 裝置和設定 SPI 參數
+  */
 static int spi_open_and_configure(
     const char *device,
     uint8_t mode,
@@ -229,6 +250,7 @@ static int spi_open_and_configure(
         return -1;
     }
 
+    //以下三段用Linux SPI Driver設定 Raspberry Pi 的 SPI 參數
     if (ioctl(fd, SPI_IOC_WR_MODE, &mode) == -1) {
         perror("SPI_IOC_WR_MODE");
         close(fd);
@@ -257,21 +279,9 @@ static int spi_open_and_configure(
     return fd;
 }
 
-static void print_bytes(
-    const char *label,
-    const uint8_t *buffer,
-    size_t length
-)
-{
-    printf("%s:", label);
-
-    for (size_t i = 0; i < length; i++) {
-        printf(" %02X", buffer[i]);
-    }
-
-    printf("\n");
-}
-
+/**
+  * @brief  執行一次完整的 SPI 傳輸，送出 tx_buf，同時把收到的資料放進 rx_buf。同時負責送與收
+  */
 static int spi_transfer(
     int fd,
     const uint8_t *tx_buf,
@@ -291,6 +301,9 @@ static int spi_transfer(
         .cs_change = 0
     };
 
+    // SPI_IOC_MESSAGE(1) 一個包含 1 個 spi_ioc_transfer 的 SPI Message
+    //回傳實際完成傳輸的 Bytes 數
+    //同時送、收封包。全雙工
     int result = ioctl(fd, SPI_IOC_MESSAGE(1), &transfer);
 
     if (result < 0) {
@@ -311,38 +324,9 @@ static int spi_transfer(
     return 0;
 }
 
-// 負責執行 SPI transaction，取得 60 bytes
-static int spi_read_raw(
-    int fd,
-    uint8_t *rx_buf,
-    size_t length,
-    uint32_t speed_hz,
-    uint8_t bits_per_word
-)
-{
-    uint8_t tx_dummy[SYSTEM_PACKET_SIZE] = {0};
-
-    if (length > sizeof(tx_dummy)) {
-        fprintf(
-            stderr,
-            "SPI read length too large: requested=%zu, maximum=%zu\n",
-            length,
-            sizeof(tx_dummy)
-        );
-        return -1;
-    }
-
-    return spi_transfer(
-        fd,
-        tx_dummy,
-        rx_buf,
-        length,
-        speed_hz,
-        bits_per_word
-    );
-}
-
-// 負責將 raw bytes 解析成 SystemDataPacketV0
+/**
+  * @brief  負責將 raw bytes 解析成 SystemDataPacketV0
+  */
 static int parse_system_packet_v0(
     const uint8_t *raw_buf,
     size_t raw_buf_size,
@@ -373,6 +357,9 @@ static int parse_system_packet_v0(
     return 0;
 }
 
+/**
+  * @brief  執行一次完整的 SPI 傳輸，送出 tx_buf，同時把收到的資料放進 rx_buf。同時負責送與收
+  */
 static int spi_read_packet(
     int fd,
     SystemDataPacketV0 *packet,
@@ -392,16 +379,22 @@ static int spi_read_packet(
         return -1;
     }
 
+    //清除舊資料或初始化外部傳入的 Buffer，重新填成 0
     memset(raw_buf, 0, raw_buf_size);
 
-    if (spi_read_raw(
+    uint8_t tx_buf[SYSTEM_PACKET_SIZE] = {0};
+
+    //tx_buf 不會被修改，它只是 Driver 拿去送出去。
+    //raw_buf 會被 Driver 寫入收到的資料。
+    if (spi_transfer(
             fd,
+            tx_buf,
             raw_buf,
             sizeof(*packet),
             speed_hz,
             bits_per_word
         ) < 0) {
-        return -1;
+            return -1;
     }
 
     if (parse_system_packet_v0(
@@ -412,17 +405,16 @@ static int spi_read_packet(
         return -1;
     }
 
-    if (validate_packet_header(packet) < 0) {
-        return 1;
-    }
-
-    if (validate_packet_checksum(packet) < 0) {
+    if (SystemPacket_Validate(packet) < 0) {
         return 1;
     }
 
     return 0;
 }
 
+/**
+  * @brief  讓 Raspberry Pi 固定每 100 ms 讀一次 SPI，而不是因為 usleep() 的累積誤差讓週期越跑越偏
+  */
 static void timespec_add_ms(
     struct timespec *time_value,
     uint32_t milliseconds
@@ -442,6 +434,9 @@ static void timespec_add_ms(
     }
 }
 
+/**
+  * @brief  比較兩個 timespec 時間，判斷誰比較早、誰比較晚
+  */
 static int timespec_compare(
     const struct timespec *left,
     const struct timespec *right
@@ -466,8 +461,13 @@ static int timespec_compare(
     return 0;
 }
 
+
+//一個停止旗標 ， sig_atomic_t 保證在 Signal 中可以安全存取
 static volatile sig_atomic_t stop_requested = 0;
 
+/**
+  * @brief  當使用者按 Ctrl+C 時，不是立刻強制結束程式，而是通知主程式「該停止了」，由主程式完成善後工作後再正常結束。
+  */
 static void handle_sigint(int signal_number)
 {
     (void)signal_number;
@@ -476,7 +476,7 @@ static void handle_sigint(int signal_number)
 
 int main(void)
 {
-
+    //收到 SIGINT，不要用預設方式，改成先呼叫 handle_sigint()
     if (signal(SIGINT, handle_sigint) == SIG_ERR) {
         perror("signal");
         return 1;
@@ -505,8 +505,9 @@ int main(void)
 
     struct timespec next_deadline = {0};
 
+    //取得目前的時間，next_deadline作為第一次讀取 SPI 的基準時間
     if (clock_gettime(
-            CLOCK_MONOTONIC,
+            CLOCK_MONOTONIC,  //開機後經過多久
             &next_deadline
         ) != 0) {
         perror("clock_gettime");
@@ -528,6 +529,7 @@ int main(void)
 
         read_count++;
 
+        //進行SPI交易
         int read_result = spi_read_packet(
             fd,
             &packet,
@@ -543,22 +545,19 @@ int main(void)
         }
 
         if (read_result == 0) {
-            validate_packet_continuity(
-                &packet,
-                &continuity_state
-            );
+            // 封包有效，進行連續性檢查
+            validate_packet_continuity(&packet, &continuity_state);
 
-            printf("Read %llu ",(unsigned long long)read_count);
-            print_bytes(
-                "RX",
-                rx_buf,
-                sizeof(rx_buf)
-            );
-            print_packet_summary(&packet);
+            //printf("Read %llu ",(unsigned long long)read_count);
+            //print_packet_summary(&packet);
+
+            //震動檢查
+            process_vibration(&packet);
         }
 
         struct timespec current_time = {0};
 
+        //取得當下時間
         if (clock_gettime(
                 CLOCK_MONOTONIC,
                 &current_time
@@ -570,7 +569,7 @@ int main(void)
 
         /*
         * 若本輪工作已超過 deadline，不連續追趕錯過的週期。
-        * 從目前時間重新安排下一次讀取，避免背靠背 SPI transaction。
+        * 從目前時間重新安排下一次讀取，不要一筆 SPI 傳輸剛結束，下一筆又立刻開始，中間完全沒有間隔
         */
         if (timespec_compare(
                 &current_time,
@@ -586,6 +585,8 @@ int main(void)
 
         int sleep_result;
 
+        //讓程式穩定等到下一個 SPI 讀取時間
+        //如果等待途中被一般 Signal 打斷，就繼續等
         do {
             sleep_result = clock_nanosleep(
                 CLOCK_MONOTONIC,

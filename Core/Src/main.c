@@ -8,7 +8,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "cmsis_os.h"
+#include "cmsis_os.h"  //CMSIS-RTOS介面標頭檔
 #include "i2c.h"
 #include "spi.h"
 #include "usb_device.h"
@@ -17,8 +17,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include "usbd_core.h"
-#include "usbd_cdc_if.h"
+#include "usbd_core.h" //USB Device 核心層的介面
+#include "usbd_cdc_if.h" //USB CDC(Communication Device Class) 類別的使用者介面
 #include "mpu6050_driver.h"
 /* USER CODE END Includes */
 
@@ -29,10 +29,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TEST_LED_PORT       GPIOC
-#define TEST_LED_PIN        GPIO_PIN_13
-#define TEST_LED_ON         GPIO_PIN_RESET
-#define TEST_LED_OFF        GPIO_PIN_SET
+//板子 LED 是 Active Low
+#define TEST_LED_PORT       GPIOC           //GPIO Port C
+#define TEST_LED_PIN        GPIO_PIN_13     //GPIO Pin 13 (Test LED)
+#define TEST_LED_ON         GPIO_PIN_RESET  //Low  → LED 亮
+#define TEST_LED_OFF        GPIO_PIN_SET    //High → LED 熄滅
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -43,14 +44,19 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+//  USB Device 的控制結構型別
 extern USBD_HandleTypeDef hUsbDeviceFS;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
+//設定 STM32 的系統時鐘
 void SystemClock_Config(void);
+//初始化 FreeRTOS 定義在freertos.c
 void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
+//初始化 PC13 LED
 static void TestLED_Init(void);
+//在 Error_Handler() 裡，讓 LED 閃爍時產生間隔
 static void BusyDelay(volatile uint32_t count);
 /* USER CODE END PFP */
 
@@ -58,67 +64,75 @@ static void BusyDelay(volatile uint32_t count);
 /* USER CODE BEGIN 0 */
 
 /**
-  * @brief  Redirect printf() to USB CDC.
+  * @brief  將 printf() 的輸出重新導向到 USB CDC (Virtual COM Port)，讓 printf() 能透過 USB 傳到電腦。
   *
-  * Important:
-  * - No printf() is used before the scheduler starts in this baseline.
-  * - When USB is not configured, data is dropped instead of blocking.
-  * - When the scheduler is running, BUSY is retried with osDelay().
-  * - Before the scheduler is running, BUSY is not waited on.
+  * 注意事項：
+  * - USB 尚未完成枚舉 (Enumeration) 時，不會等待，而是直接丟棄此次輸出。
+  * - FreeRTOS Scheduler 已啟動時，若 USB 忙碌 (BUSY)，會使用 osDelay() 在 USB 忙碌時暫時讓出 CPU。
+  * - Scheduler 尚未啟動時，不會等待 USB 空閒，以避免系統卡住。
   */
 int _write(int file, char *ptr, int len) {
+    // 告訴編譯器這個參數我故意不用，不要警告我。
     (void)file;
 
+    //檢查資料是否合法
     if ((ptr == NULL) || (len <= 0)) {
         return 0;
     }
 
+    //檢查 USB 是否已完成連線
     if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED) {
         return len;
     }
-
+    //最多重試 100 次
     for (uint32_t retry = 0U; retry < 100U; retry++) {
-        if (CDC_Transmit_FS((uint8_t *)ptr, (uint16_t)len) == USBD_OK) {
-            return len;
-        }
-
-        if (osKernelGetState() == osKernelRunning) {
-            osDelay(1U);
-        } else {
-            /*
-             * Avoid HAL_Delay() here.  A pre-scheduler printf() can occur while
-             * interrupts are temporarily masked by the RTOS port.
-             */
-            return len;
-        }
+      //嘗試透過 USB 傳送
+      if (CDC_Transmit_FS((uint8_t *)ptr, (uint16_t)len) == USBD_OK) {
+        return len;
+      }
+      //Scheduler 是否已啟動
+      if (osKernelGetState() == osKernelRunning) {
+        osDelay(1U);
+      } else {
+        /*
+          * Scheduler 尚未啟動時，不使用 HAL_Delay() 等待，
+          * 避免在 RTOS 初始化期間造成阻塞，因此直接放棄此次輸出。
+          */
+        return len;
+      }
     }
-
-    /* Timeout: drop this message rather than deadlocking the task. */
+    /* 超過重試次數仍無法傳送，直接放棄此次輸出，避免 Task 被卡住。 */
     return len;
 }
 
 /**
-  * @brief  Initialize the Blackpill onboard LED on PC13.
+  * @brief  初始化 PC13 LED
   */
 static void TestLED_Init(void) {
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
+  //初始化
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  //開啟 GPIOC 時鐘
+  __HAL_RCC_GPIOC_CLK_ENABLE();
 
-    __HAL_RCC_GPIOC_CLK_ENABLE();
-
-    GPIO_InitStruct.Pin = TEST_LED_PIN;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-
-    HAL_GPIO_Init(TEST_LED_PORT, &GPIO_InitStruct);
-    HAL_GPIO_WritePin(TEST_LED_PORT, TEST_LED_PIN, TEST_LED_OFF);
+  GPIO_InitStruct.Pin = TEST_LED_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;   //推挽輸出模式
+  GPIO_InitStruct.Pull = GPIO_NOPULL;           //不使用上拉或下拉電阻
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;  //低速率輸出
+  //初始化 GPIOC Pin 13 為推挽輸出模式 PC13 以後要當 GPIO 輸出使用
+  HAL_GPIO_Init(TEST_LED_PORT, &GPIO_InitStruct);
+  //這腳位現輸出什麼電位 現在立刻把 PC13 輸出 High(熄滅)
+  HAL_GPIO_WritePin(TEST_LED_PORT, TEST_LED_PIN, TEST_LED_OFF);
 }
 
+/**
+  * @brief  在 Error_Handler() 裡，讓 LED 閃爍時產生間隔 
+  */
 static void BusyDelay(volatile uint32_t count) {
-    while (count > 0U) {
-        __NOP();
-        count--;
-    }
+  while (count > 0U) {
+    //不做任何事情的 CPU 指令
+      __NOP();
+      count--;
+  }
 }
 /* USER CODE END 0 */
 
@@ -128,7 +142,6 @@ static void BusyDelay(volatile uint32_t count) {
   */
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -154,6 +167,7 @@ int main(void)
   MX_I2C1_Init();
   MX_I2C2_Init();
   MX_SPI1_Init();
+  // Initialize USB Device
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
     /*
@@ -166,37 +180,44 @@ int main(void)
     * Initialize MPU6050 before starting FreeRTOS.
     * Do not print here because USB enumeration may not be complete.
     */
-    if (!MPU6050_Init(&hi2c1)) {
-        Error_Handler();
+    HAL_StatusTypeDef imu_init_status = MPU6050_Init(&hi2c1);
+    if (imu_init_status != HAL_OK)
+    {
+      printf(
+        "MPU6050 init failed: status=%d, i2c_error=0x%08lX\r\n",
+        (int)imu_init_status,
+        (unsigned long)HAL_I2C_GetError(&hi2c1)
+      );
+
+      Error_Handler();
     }
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
-  MX_FREERTOS_Init();
+  osKernelInitialize();   //建立 RTOS
+  MX_FREERTOS_Init();     //建立所有 Task
 
   /* Start scheduler */
-  osKernelStart();
+  osKernelStart();        //開始執行 Task
 
   /* We should never get here as control is now taken by the scheduler */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-     while (1) {
-        /*
-        * Reaching this loop means osKernelStart() returned unexpectedly.
-        */
-        Error_Handler();
-    }
-    /* USER CODE END WHILE */
+  while (1) {
+    /*
+    * 到這了代表osKernelStart()啟動是失敗
+    */
+    Error_Handler();
+  }
+  /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
+  /* USER CODE BEGIN 3 */
   /* USER CODE END 3 */
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
+  * @brief  設定 STM32 的系統時鐘
   */
 void SystemClock_Config(void)
 {
@@ -251,6 +272,7 @@ void SystemClock_Config(void)
   * @param  htim : TIM handle
   * @retval None
   */
+//如果是 TIM5 的更新中斷，就呼叫 HAL_IncTick() 提供 HAL 的時間基準
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
@@ -285,8 +307,9 @@ void Error_Handler(void)
     HAL_GPIO_Init(TEST_LED_PORT, &GPIO_InitStruct);
 
     while (1) {
-        HAL_GPIO_TogglePin(TEST_LED_PORT, TEST_LED_PIN);
-        BusyDelay(1500000U);
+      //把目前 GPIO 的狀態反轉（Toggle）。
+      HAL_GPIO_TogglePin(TEST_LED_PORT, TEST_LED_PIN);
+      BusyDelay(1500000U);
     }
   /* USER CODE END Error_Handler_Debug */
 }
