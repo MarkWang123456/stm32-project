@@ -32,6 +32,9 @@
 #define TEST_LED_PORT       GPIOC
 #define TEST_LED_PIN        GPIO_PIN_13
 
+#define PI_COMMAND_NONE          0x00U  //Raspberry Pi 傳給 STM32 的簡單命令。
+#define PI_COMMAND_TOGGLE_LED    0x01U  //0x00 代表沒有命令，0x01 代表切換 LED。
+
 #define MPU_SAMPLE_PERIOD_MS    10U   // 每 10 ms(100 Hz) 讀一次 MPU6050
 #define MPU_LOG_EVERY_SAMPLES   100U  // 每讀 100 筆資料(1 Hz) 才印一次 Log
 /* USER CODE END PD */
@@ -178,16 +181,45 @@ void StartTestTask(void *argument)
       //一般完成或錯誤恢復成功後，重新掛載 SPI。
       if ((spi_recovery_needed == 0U) && (spi_txrx_done != 0U))
       {
-        // 先消耗目前這次完成事件 如果啟動失敗，再把重試旗標設回去。
-        spi_txrx_done = 0U;
+          /*
+          * 先消耗這次 SPI 完成事件。
+          */
+          spi_txrx_done = 0U;
 
-        SystemPacket_PublishSnapshot();
+          /*
+          * SPI 是全雙工。
+          * STM32 傳送 packet_snapshot 給 Pi 的同時，
+          * Pi 傳送的資料會進入 spi_rx_buf。
+          *
+          * 目前只使用第一個 byte 作為簡單命令。
+          */
+          uint8_t pi_command = spi_rx_buf[0];
 
-        // SPI 掛載失敗時，設回旗標並於下一週期重試
-        if (SPI_StartTransfer() != HAL_OK)
-        {
-            spi_txrx_done = 1U;
-        }
+          /*
+          * 讀取後立即清除，避免錯誤復原流程重新處理舊命令。
+          */
+          spi_rx_buf[0] = PI_COMMAND_NONE;
+
+          if (pi_command == PI_COMMAND_TOGGLE_LED)
+          {
+            /*
+            * LED 狀態切換代表 STM32 已收到並處理 Pi 傳來的命令。
+            */             
+            HAL_GPIO_TogglePin(TEST_LED_PORT, TEST_LED_PIN);
+          }
+
+          /*
+          * 準備下一次傳送給 Raspberry Pi 的感測資料。
+          */
+          SystemPacket_PublishSnapshot();
+
+          /*
+          * 重新掛載下一次 SPI 全雙工傳輸。
+          */
+          if (SPI_StartTransfer() != HAL_OK)
+          {
+              spi_txrx_done = 1U;
+          }
       }
       //透過 I2C1 讀取 MPU6050
       HAL_StatusTypeDef imu_status =MPU6050_ReadAll(&hi2c1, &accel, &gyro);
@@ -221,7 +253,7 @@ void StartTestTask(void *argument)
         sampleCount = 0U;
 
         /* One-second heartbeat. */
-        HAL_GPIO_TogglePin(TEST_LED_PORT, TEST_LED_PIN);
+        //HAL_GPIO_TogglePin(TEST_LED_PORT, TEST_LED_PIN);
 
         // printf(
         //     "Acc(g): X=%.2f Y=%.2f Z=%.2f | "
